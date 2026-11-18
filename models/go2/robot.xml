@@ -1,0 +1,85 @@
+<mujoco model="go2">
+  <compiler angle="radian"/>
+
+  <asset>
+    <mesh name="base" file="base.stl"/>
+    <mesh name="hip" file="hip.stl"/>
+    <mesh name="thigh_mirror" file="thigh_mirror.stl"/>
+    <mesh name="calf_mirror" file="calf_mirror.stl"/>
+    <mesh name="thigh" file="thigh.stl"/>
+    <mesh name="calf" file="calf.stl"/>
+  </asset>
+
+  <worldbody>
+    <body name="go2/base_link_inertia" pos="0 0 0.27" >
+      <site name="sensorsurf" pos="0 0 0" size=".005 .005 .005" rgba="0.5 0.5 0.5 1" euler="0 0 0"/>
+      <inertial pos="0.021112 0 -0.005366" quat="-0.000543471 0.713435 -0.00173769 0.700719" mass="6.921" diaginertia="0.107027 0.0980771 0.0244531"/>
+      <joint name="go2/base_joint" type="free"/>
+      <geom pos="0 0 0" quat="0.707105 0.707108 0 0" type="mesh" mesh="base"/>
+      <body name="go2/abad_1" pos="0.1934 -0.0465 0">
+        <inertial pos="-0.0054 -0.00194 -0.000105" quat="0.498237 0.505462 0.499245 0.497014" mass="0.678" diaginertia="0.00088403 0.000596003 0.000479967"/>
+        <joint name="go2/abad_1_joint" pos="0 0 0" axis="1 0 0" range="-1.0472 1.0472"/>
+        <geom quat="-0.707075 0.707138 0 0" type="mesh" rgba="0 0.4 0 1" mesh="hip"/>
+        <body name="go2/hip_1" pos="0 -0.0955 0">
+          <inertial pos="-0.00374 0.0223 -0.0327" quat="0.551623 -0.0200632 0.0847635 0.829533" mass="1.152" diaginertia="0.00594973 0.00584149 0.000878787"/>
+          <joint name="go2/hip_1_joint" pos="0 0 0" axis="0 -1 0" range="-3.4907 1.5708"/>
+          <geom quat="0.707105 0.707108 0 0" type="mesh" rgba="0 0.4 0 1" mesh="thigh_mirror"/>
+          <body name="go2/knee_1" pos="0 0 -0.213">
+            <inertial pos="0.0043501 0.000773969 -0.135206" quat="0.698462 -0.00291756 0.00291333 0.715636" mass="0.194" diaginertia="0.00141561 0.00139457 4.33904e-05"/>
+            <joint name="go2/knee_1_joint" pos="0 0 0" axis="0 -1 0" range="0.83776 2.7227"/>
+            <geom pos="0 0 0" quat="0.707105 0.707108 0 0" type="mesh" rgba="0 0.4 0 1" mesh="calf_mirror"/>
+            <geom name="go2/foot_1" size="0.022" pos="0 0 -0.213" rgba="0 0 0 0.9" friction="1.0 0.005 0.0001"/>
+          </body>
+        </body>
+      </body>
+      <body name="go2/abad_2" pos="0.1934 0.0465 0">
+        <inertial pos="-0.0054 0.00194 -0.000105" quat="0.497014 0.499245 0.505462 0.498237" mass="0.678" diaginertia="0.00088403 0.000596003 0.000479967"/>
+        <joint name="go2/abad_2_joint" pos="0 0 0" axis="1 0 0" range="-1.0472 1.0472"/>
+        <geom quat="0.707105 0.707108 0 0" type="mesh" rgba="0 0.4 0 1" mesh="hip"/>
+        <body name="go2/hip_2" pos="0 0.0955 0">
+          <inertial pos="-0.00374 -0.0223 -0.0327" quat="0.829533 0.0847635 -0.0200632 0.551623" mass="1.152" diaginertia="0.00594973 0.00584149 0.000878787"/>
+          <joint name="go2/hip_2_joint" pos="0 0 0" axis="0 -1 0" range="-3.4907 1.5708"/>
+          <geom quat="0.707105 0.707108 0 0" type="mesh" rgba="0 0.4 0 1" mesh="thigh"/>
+          <body name="go2/knee_2" pos="0 0 -0.213">
+            <inertial pos="0.0043501 -0.000773969 -0.135206" quat="0.715636 0.00291333 -0.00291756 0.698462" mass="0.194" diaginertia="0.00141561 0.00139457 4.33904e-05"/>
+            <joint name="go2/knee_2_joint" pos="0 0 0" axis="0 -1 0" range="0.83776 2.7227"/>
+            <geom pos="0 0 0" quat="0.707105 0.707108 0 0" type="mesh" rgba="0 0.4 0 1" mesh="calf"/>
+            <geom name="go2/foot_2" size="0.022" pos="0 0 -0.213" rgba="0 0 0 0.9" friction="1.0 0.005 0.0001"/>
+          </body>
+        </body>
+      </body>
+      <body name="go2/abad_3" pos="-0.1934 -0.0465 0">
+        <inertial pos="0.0054 -0.00194 -0.000105" quat="0.499245 0.497014 0.498237 0.505462" mass="0.678" diaginertia="0.00088403 0.000596003 0.000479967"/>
+        <joint name="go2/abad_3_joint" pos="0 0 0" axis="1 0 0" range="-1.0472 1.0472"/>
+        <geom quat="-3.27565e-05 3.27594e-05 -0.707075 -0.707138" type="mesh" rgba="0 0.4 0 1" mesh="hip"/>
+        <body name="go2/hip_3" pos="0 -0.0955 0">
+          <inertial pos="-0.00374 0.0223 -0.0327" quat="0.551623 -0.0200632 0.0847635 0.829533" mass="1.152" diaginertia="0.00594973 0.00584149 0.000878787"/>
+          <joint name="go2/hip_3_joint" pos="0 0 0" axis="0 -1 0" range="-3.4907 1.5708"/>
+          <geom quat="0.707105 0.707108 0 0" type="mesh" rgba="0 0.4 0 1" mesh="thigh_mirror"/>
+          <body name="go2/knee_3" pos="0 0 -0.213">
+            <inertial pos="0.0043501 0.000773969 -0.135206" quat="0.698462 -0.00291756 0.00291333 0.715636" mass="0.194" diaginertia="0.00141561 0.00139457 4.33904e-05"/>
+            <joint name="go2/knee_3_joint" pos="0 0 0" axis="0 -1 0" range="0.83776 2.7227"/>
+            <geom pos="0 0 0" quat="0.707105 0.707108 0 0" type="mesh" rgba="0 0.4 0 1" mesh="calf_mirror"/>
+            <geom name="go2/foot_3" size="0.022" pos="0 0 -0.213" rgba="0 0 0 0.9" friction="1.0 0.005 0.0001"/>
+          </body>
+        </body>
+      </body>
+      <body name="go2/abad_4" pos="-0.1934 0.0465 0">
+        <inertial pos="0.0054 0.00194 -0.000105" quat="0.505462 0.498237 0.497014 0.499245" mass="0.678" diaginertia="0.00088403 0.000596003 0.000479967"/>
+        <joint name="go2/abad_4_joint" pos="0 0 0" axis="1 0 0" range="-1.0472 1.0472"/>
+        <geom quat="3.27579e-05 3.27581e-05 0.707105 -0.707108" type="mesh" rgba="0 0.4 0 1" mesh="hip"/>
+        <body name="go2/hip_4" pos="0 0.0955 0">
+          <inertial pos="-0.00374 -0.0223 -0.0327" quat="0.829533 0.0847635 -0.0200632 0.551623" mass="1.152" diaginertia="0.00594973 0.00584149 0.000878787"/>
+          <joint name="go2/hip_4_joint" pos="0 0 0" axis="0 -1 0" range="-3.4907 1.5708"/>
+          <geom quat="0.707105 0.707108 0 0" type="mesh" rgba="0 0.4 0 1" mesh="thigh"/>
+          <body name="go2/knee_4" pos="0 0 -0.213">
+            <inertial pos="0.0043501 -0.000773969 -0.135206" quat="0.715636 0.00291333 -0.00291756 0.698462" mass="0.194" diaginertia="0.00141561 0.00139457 4.33904e-05"/>
+            <joint name="go2/knee_4_joint" pos="0 0 0" axis="0 -1 0" range="0.83776 2.7227"/>
+            <geom pos="0 0 0" quat="0.707105 0.707108 0 0" type="mesh" rgba="0 0.4 0 1" mesh="calf"/>
+            <geom name="go2/foot_4" size="0.022" pos="0 0 -0.213" rgba="0 0 0 0.9" friction="1.0 0.005 0.0001"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

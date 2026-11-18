@@ -1,0 +1,163 @@
+<?xml version="1.0"?>
+<!--
+  Go2 model adapted to demir-style naming and conventions.
+  Mapping:
+    body -> base
+    abad -> hip
+    hip  -> thigh
+    knee -> calf
+-->
+
+<robot name="go2" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <xacro:property name="robot_namespace" value="go2"/>
+
+  <!--
+  - custom tags. placeholders for now
+  gear ratios - no units
+  motorTauMax: maximum torque the motor can apply [Nm]
+  batteryV: Battery Voltage [V]
+  motorKT: from motor sheet
+  motorR: Ohms
+  rotorRadius/rotorHeight [m]
+  rotorMass [kg]
+  -->
+  <custom
+    body_height="0.114"
+    abadGearRatio="1"
+    hipGearRatio="1"
+    kneeGearRatio="1"
+    motorTauMax="25"
+    batteryV="24"
+    motorKT="0.095"
+    motorR="0.272"
+    rotorRadius="0.02"
+    rotorHeight="0.02"
+    rotorMass="0.0"
+  />
+
+  <!-- maximum motor torque [Nm], enter the same value you entered above. -->
+  <xacro:property name="motorTauMax" value="25"/>
+
+  <!-- Use mesh files -->
+  <xacro:property name="use_mesh_file" value="1"/>
+
+  <!-- Use explicit inertias -->
+  <xacro:property name="use_simple_inertia" value="0"/>
+
+  <!-- Use a simple sphere for feet -->
+  <xacro:property name="use_sphere_feet" value="1"/>
+
+  <!-- mass of body parts [kg] -->
+  <xacro:property name="body_mass" value="6.921"/>
+  <xacro:property name="abad_mass" value="0.678"/>
+  <xacro:property name="hip_mass" value="1.152"/>
+  <xacro:property name="knee_mass" value="0.154"/>
+  <xacro:property name="foot_mass" value="0.04"/>
+
+  <!-- Friction and damping standardized for all joints -->
+  <xacro:property name="joint_damping" value="0.0"/>
+  <xacro:property name="joint_friction" value="0.0"/>
+
+  <!-- COM wrt BASE LINK body frame [m] -->
+  <xacro:property name="body_com_origin" value="${[0.021112, 0.0, -0.005366]}"/>
+
+  <!-- Inertia of base link wrt BASE LINK body frame [kg*m^2] -->
+  <xacro:property name="body_inertia_at_com" value="${[0.02448, 0.00012166, 0.0014849, 0.098077, -3.12e-05, 0.107]}"/>
+
+  <!-- Base mesh orientation (rpy) to align mesh with base_link frame -->
+  <xacro:property name="base_mesh_rpy" value="${[1.5708, 0.0, 0.0]}"/>
+  <xacro:property name="hip_mesh_rpy" value="${[1.5708, 0.0, 0.0]}"/>
+  <xacro:property name="knee_mesh_rpy" value="${[1.5708, 0.0, 0.0]}"/>
+
+  <!-- Position of ABAD Joint (go2 hip) wrt BASE LINK -->
+  <!-- Values are taken from go2_description FL (front-left) leg: +x, +y -->
+  <xacro:property name="abad_joint_origin" value="${[0.1934, 0.0465, 0.0]}"/>
+
+  <!-- COM of ABAD LINK (go2 hip) wrt ABAD LINK JOINT FRAME -->
+  <xacro:property name="abad_com_origin" value="${[-0.0054, 0.00194, -0.000105]}"/>
+
+  <!-- Inertia of ABAD LINK (go2 hip) wrt ABAD COM -->
+  <xacro:property name="abad_inertia_at_com" value="${[0.00048, -3.01e-06, 1.11e-06, 0.000884, -1.42e-06, 0.000596]}"/>
+
+  <!-- Position of HIP Joint (go2 thigh) wrt ABAD LINK -->
+  <xacro:property name="hip_joint_origin" value="${[0.0, 0.0955, 0.0]}"/>
+
+  <!-- COM of HIP LINK (go2 thigh) wrt HIP LINK JOINT FRAME -->
+  <xacro:property name="hip_com_origin" value="${[-0.00374, -0.0223, -0.0327]}"/>
+
+  <!-- Inertia of HIP LINK (go2 thigh) wrt HIP COM -->
+  <xacro:property name="hip_inertia_at_com" value="${[0.00584, 8.72e-05, -0.000289, 0.0058, 0.000808, 0.00103]}"/>
+
+  <!-- Position of KNEE Joint (go2 calf) wrt HIP LINK -->
+  <xacro:property name="knee_joint_origin" value="${[0.0, 0.0, -0.213]}"/>
+
+  <!-- COM of KNEE LINK (go2 calf) wrt KNEE LINK JOINT FRAME -->
+  <xacro:property name="knee_com_origin" value="${[0.00548, -0.000975, -0.115]}"/>
+
+  <!-- Inertia of KNEE LINK (go2 calf) wrt KNEE COM -->
+  <xacro:property name="knee_inertia_at_com" value="${[0.00108, 3.4e-07, 1.72e-05, 0.0011, 8.28e-06, 3.29e-05]}"/>
+
+  <!-- Position of FOOT Joint wrt KNEE LINK -->
+  <xacro:property name="foot_joint_origin" value="${[0.0, 0.0, -0.213]}"/>
+
+  <!-- COM of FOOT LINK wrt KNEE LINK -->
+  <xacro:property name="foot_com_origin" value="${[0.0, 0.0, 0.0]}"/>
+
+  <!-- Inertia of FOOT LINK wrt FOOT COM -->
+  <xacro:property name="foot_inertia_at_com" value="${[9.6e-06, 0.0, 0.0, 9.6e-06, 0.0, 9.6e-06]}"/>
+
+  <!-- Angle limits (go2) -->
+  <xacro:property name="joint_limit_lower_abad" value="-1.0472"/>
+  <xacro:property name="joint_limit_upper_abad" value="1.0472"/>
+  <xacro:property name="hip_limit_lower_raw" value="-1.5708"/>
+  <xacro:property name="hip_limit_upper_raw" value="3.4907"/>
+  <xacro:property name="knee_limit_lower_raw" value="-2.7227"/>
+  <xacro:property name="knee_limit_upper_raw" value="-0.83776"/>
+
+  <!-- Joint axis sign (flip hip/knee positive direction if needed) -->
+  <xacro:property name="hip_axis_sign" value="-1.0"/>
+  <xacro:property name="knee_axis_sign" value="-1.0"/>
+  <xacro:property name="joint_limit_lower_hip" value="${hip_limit_lower_raw if hip_axis_sign > 0 else -hip_limit_upper_raw}"/>
+  <xacro:property name="joint_limit_upper_hip" value="${hip_limit_upper_raw if hip_axis_sign > 0 else -hip_limit_lower_raw}"/>
+  <xacro:property name="joint_limit_lower_knee" value="${knee_limit_lower_raw if knee_axis_sign > 0 else -knee_limit_upper_raw}"/>
+  <xacro:property name="joint_limit_upper_knee" value="${knee_limit_upper_raw if knee_axis_sign > 0 else -knee_limit_lower_raw}"/>
+
+  <!-- directory folder containing the mesh files -->
+  <xacro:property name="meshdir" value="package://modeling/urdf/${robot_namespace}/meshes"/>
+
+  <!-- mesh filenames (no extension) -->
+  <xacro:property name="body_meshfile" value="base"/>
+  <xacro:property name="abad_meshfile" value="hip"/>
+  <xacro:property name="hip_meshfile" value="thigh"/>
+  <xacro:property name="knee_meshfile" value="calf"/>
+  <xacro:property name="foot_meshfile" value="foot"/>
+
+  <!-- Foot sphere radius [m] -->
+  <xacro:property name="foot_radius" value="0.022"/>
+
+  <!-- Approximate geometry values (used when use_mesh_file=0) -->
+  <!-- Sourced from go2_description collision geometry -->
+  <xacro:property name="body_length" value="0.3762"/>
+  <xacro:property name="body_width" value="0.0935"/>
+  <xacro:property name="body_height" value="0.114"/>
+  <xacro:property name="abad_length" value="0.0955"/>
+  <xacro:property name="abad_radius" value="0.046"/>
+  <xacro:property name="hip_length" value="0.213"/>
+  <xacro:property name="hip_radius" value="0.0245"/>
+  <xacro:property name="knee_length" value="0.213"/>
+  <xacro:property name="knee_radius" value="0.012"/>
+
+  <!-- Sign convention for the quadruped coordinate frames. Do not change. -->
+  <xacro:property name="dir_sign" value="${[1, 1, -1, -1]}"/>
+  <xacro:property name="side_sign" value="${[-1, 1, -1, 1]}"/>
+
+  <!-- Included URDF Files -->
+  <xacro:include filename="quadruped_macros.xacro"/>
+  <xacro:base_macro robot_namespace="${robot_namespace}"/>
+  <xacro:leg_macro robot_namespace="${robot_namespace}" leg="1"/>
+  <xacro:leg_macro robot_namespace="${robot_namespace}" leg="2"/>
+  <xacro:leg_macro robot_namespace="${robot_namespace}" leg="3"/>
+  <xacro:leg_macro robot_namespace="${robot_namespace}" leg="4"/>
+
+</robot>

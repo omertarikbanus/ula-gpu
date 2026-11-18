@@ -1,0 +1,378 @@
+<?xml version="1.0"?>
+<!--
+  This file contains URDF macros. 
+
+  base_macro: returns the xml elements for base link and base link inertia of the robot.
+  leg_macro: returns abad, hip, knee link elements based on leg number and changeable params set in parent file of this file. 
+    based on leg number, sign convention of parameters are determined. 
+
+  CHANGELOG:
+  2025-05-09 Tarık: Added joint_limit_(upper/lower)_(abad/hip/knee) variables. Defined in robot urdf as xacro property.
+-->
+
+
+
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+    <material name="gray">
+    <color rgba="0.5 0.5 0.5 1" />
+    </material>
+
+    <material name="green">
+    <color rgba="0 0.4 0 1" />
+    </material>
+
+    <material name="black">
+    <color rgba="0 0 0 0.9" />
+    </material>
+  <xacro:macro name="sensor_site" params="name pos size rgba euler">
+    <site name="${name}" pos="${pos}" size="${size}" rgba="${rgba}" euler="${euler}" />
+  </xacro:macro>
+
+  <!-- Later in your file, call the macro -->
+
+
+
+  <xacro:macro name="base_macro"
+      params="robot_namespace">
+    <link name="${robot_namespace}/base_link"> </link>
+    <joint name="${robot_namespace}/base_joint" type="floating">
+
+
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <parent link="${robot_namespace}/base_link" />
+      <child link="${robot_namespace}/base_link_inertia" />
+    </joint>
+    <link name="${robot_namespace}/base_link_inertia">
+      <xacro:sensor_site
+        name="sensorsurf"
+        pos="0 0 0"
+        size=".005 .005 .005"
+        rgba="0.5 0.5 0.5 1"
+        euler="0 0 0" />
+      <inertial>        
+        <origin xyz="${body_com_origin[0]} ${body_com_origin[1]} ${body_com_origin[2]}" rpy="0 0 0" /> 
+        <mass  value="${body_mass}"/>
+        <!-- The base is symmetrical. -->
+        
+        <xacro:if value="${use_simple_inertia == 0}">
+
+             <inertia   ixx="${body_inertia_at_com[0]}"   ixy="${body_inertia_at_com[1]}" 
+                        ixz="${body_inertia_at_com[2]}"   iyy="${body_inertia_at_com[3]}" 
+                        iyz="${body_inertia_at_com[4]}"   izz="${body_inertia_at_com[5]}" />
+        </xacro:if>
+        <xacro:unless value="${use_simple_inertia == 0}">
+          <!-- Inertia tensor for a box -->
+          <inertia
+            ixx="${(1/12) * body_mass * (body_width**2 + body_height**2)}"
+            ixy="0.0"
+            ixz="0.0"
+            iyy="${(1/12) * body_mass * (body_length**2 + body_height**2)}"
+            iyz="0.0"
+            izz="${(1/12) * body_mass * (body_length**2 + body_width**2)}" />
+        </xacro:unless>  
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="${base_mesh_rpy[0]} ${base_mesh_rpy[1]} ${base_mesh_rpy[2]}" />
+        <geometry>
+          <xacro:if value="${use_mesh_file == 1}">
+            <mesh filename="${meshdir}/${body_meshfile}.stl" />  
+          </xacro:if>
+          <xacro:unless value="${use_mesh_file == 1}">
+            <box size="${body_length} ${body_width}  ${body_height}" />
+          </xacro:unless>
+        </geometry>
+        <material name="gray"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${base_mesh_rpy[0]} ${base_mesh_rpy[1]} ${base_mesh_rpy[2]}" />
+        <geometry>
+
+          <xacro:if value="${use_mesh_file == 1}">
+            <mesh filename="${meshdir}/${body_meshfile}.stl" />  
+          </xacro:if>
+          <xacro:unless value="${use_mesh_file == 1}">
+            <box size="${body_length} ${body_width}  ${body_height}" />
+          </xacro:unless>
+        
+        </geometry>
+      </collision>
+    </link>
+      </xacro:macro>
+
+
+  <!-- leg joints and links -->
+  <xacro:macro name="leg_macro"
+  
+    params="leg robot_namespace">
+    <xacro:property name="hip_roll" value="${(side_sign[leg-1] == -1) * 3.1415}"/>
+    <xacro:property name="hip_pitch" value="${(dir_sign[leg-1] == -1) * 3.1415}"/>
+    <joint name="${robot_namespace}/abad_${leg}_joint" type="revolute" >
+      <limit lower="${joint_limit_lower_abad}" upper="${joint_limit_upper_abad}" effort="1e3" velocity="1e3"/>
+      <dynamics damping="${joint_damping}" friction="${joint_friction}" />
+
+      <!-- abad_joint_origin -->
+      <origin xyz="${dir_sign[leg-1]*abad_joint_origin[0]} ${side_sign[leg-1]*abad_joint_origin[1]} ${abad_joint_origin[2]}" rpy="0 0 0" />    
+      <axis xyz="1 0 0" /> 
+      <parent link="${robot_namespace}/base_link_inertia" />
+      <child link="${robot_namespace}/abad_${leg}" />
+    </joint>
+
+
+    <link name="${robot_namespace}/abad_${leg}">
+      <inertial>
+        <!-- abad_link_origin -->
+        <origin xyz="${dir_sign[leg-1]*abad_com_origin[0]} ${side_sign[leg-1]*abad_com_origin[1]} ${abad_com_origin[2]}" rpy="0 0 0" /> 
+        <mass value="${abad_mass}" /> <!-- [kg] -->
+        <!-- abad_inertia_at_com -->
+    
+        <xacro:if value="${use_simple_inertia == 0}">
+          <inertia  ixx="${abad_inertia_at_com[0]}" ixy="${side_sign[leg-1] * dir_sign[leg-1] * abad_inertia_at_com[1] }" 
+                    ixz="${dir_sign[leg-1] * abad_inertia_at_com[2]}" iyy="${abad_inertia_at_com[3]}" 
+                    iyz="${side_sign[leg-1]*abad_inertia_at_com[4]}" izz="${abad_inertia_at_com[5]}" />
+        </xacro:if>
+        <xacro:unless value="${use_simple_inertia == 0}">
+          <!-- Inertia tensor for a cylinder -->
+          <inertia
+            ixx="${(1/12) * hip_mass * (3 * hip_radius**2 + hip_length**2)}"
+            ixy="0.0"
+            ixz="0.0"
+            iyy="${(1/12) * hip_mass * (3 * hip_radius**2 + hip_length**2)}"
+            iyz="0.0"
+            izz="${(1/2) * hip_mass * hip_radius**2}"  />
+        </xacro:unless>         
+        </inertial>
+
+      <visual>
+        <xacro:if value="${use_mesh_file == 1}">
+          <origin xyz="0 0 0" rpy="${hip_roll + 1.5708} ${hip_pitch} 0" />
+          <geometry>
+            <mesh filename="${meshdir}/${abad_meshfile}.stl" />  
+          </geometry>
+        </xacro:if>
+        <xacro:unless value="${use_mesh_file == 1}">
+         <origin xyz="${dir_sign[leg-1]*abad_length/2} 0 0" rpy="0 -1.57 0" />
+          <geometry>
+            <cylinder radius="${abad_radius}" length="${abad_length}"/>
+          </geometry>
+        </xacro:unless>
+
+
+
+        <material name="green"/>
+      </visual> 
+      <collision>
+        <xacro:if value="${use_mesh_file == 1}">
+          <origin xyz="0 0 0" rpy="${hip_roll + 1.5708} ${hip_pitch} 0" />
+          <geometry>
+            <mesh filename="${meshdir}/${abad_meshfile}.stl" />  
+          </geometry>
+        </xacro:if>
+        <xacro:unless value="${use_mesh_file == 1}">
+         <origin xyz="${dir_sign[leg-1]*abad_length/2} 0 0" rpy="0 -1.57 0" />
+          <geometry>
+            <cylinder radius="${abad_radius}" length="${abad_length}"/>
+          </geometry>
+        </xacro:unless>
+      </collision>
+    </link>
+
+    <joint name="${robot_namespace}/hip_${leg}_joint" type="revolute" >
+      <limit lower="${joint_limit_lower_hip}" upper="${joint_limit_upper_hip}" effort="1e3" velocity="1e3"/>
+      <dynamics damping="${joint_damping}" friction="${joint_friction}" />
+      <!-- hip_joint_origin -->
+      <origin xyz="${dir_sign[leg-1]*hip_joint_origin[0]} ${side_sign[leg-1]*hip_joint_origin[1]} ${hip_joint_origin[2]}" rpy="0 0 0" />
+      <axis xyz="0 ${hip_axis_sign} 0" /> 
+      <parent link="${robot_namespace}/abad_${leg}" />
+      <child link="${robot_namespace}/hip_${leg}" />
+    </joint>
+
+    <link name="${robot_namespace}/hip_${leg}">
+      <inertial>
+        <origin xyz="${hip_com_origin[0]} ${side_sign[leg-1]*hip_com_origin[1]} ${hip_com_origin[2]}" rpy="0 0 0" /> 
+        <mass value="${hip_mass}" />
+        <!-- hip_inertia_at_com -->
+        <xacro:if value="${use_simple_inertia == 0}">
+          <inertia  ixx="${hip_inertia_at_com[0]}" ixy="${side_sign[leg-1]*hip_inertia_at_com[1]}" 
+                  ixz="${hip_inertia_at_com[2]}" iyy="${hip_inertia_at_com[3]}" 
+                  iyz="${side_sign[leg-1]*hip_inertia_at_com[4]}" izz="${hip_inertia_at_com[5]}" /> 
+        </xacro:if>
+        <xacro:unless value="${use_simple_inertia == 0}">
+          <!-- Inertia tensor for a cylinder -->
+          <inertia
+            ixx="${(1/12) * hip_mass * (3 * hip_radius**2 + hip_length**2)}"
+            ixy="0.0"
+            ixz="0.0"
+            iyy="${(1/12) * hip_mass * (3 * hip_radius**2 + hip_length**2)}"
+            iyz="0.0"
+            izz="${(1/2) * hip_mass * hip_radius**2}"  />
+        </xacro:unless>
+      </inertial>
+
+      <visual>
+        <xacro:if value="${use_mesh_file == 1}">
+          <origin xyz="0 0 0" rpy="${hip_mesh_rpy[0]} ${hip_mesh_rpy[1]} ${hip_mesh_rpy[2]}" />
+          <geometry>
+            <xacro:if value="${side_sign[leg-1] == 1}">
+              <mesh filename="${meshdir}/${hip_meshfile}.stl" />
+            </xacro:if>
+            <xacro:unless value="${side_sign[leg-1] == 1}">
+              <mesh filename="${meshdir}/${hip_meshfile}_mirror.stl" />
+            </xacro:unless>
+          </geometry>
+        </xacro:if>
+        <xacro:unless value="${use_mesh_file == 1}">
+          <origin xyz="0 0 ${-hip_length/2}" rpy="0 0 0.0" />
+          <geometry>
+            <cylinder radius="${hip_radius}" length="${hip_length}"/>
+          </geometry>
+        </xacro:unless>
+        <material name="green"/>
+      </visual> 
+      <collision>
+        <xacro:if value="${use_mesh_file == 1}">
+          <origin xyz="0 0 0" rpy="${hip_mesh_rpy[0]} ${hip_mesh_rpy[1]} ${hip_mesh_rpy[2]}" />
+          <geometry>
+            <xacro:if value="${side_sign[leg-1] == 1}">
+              <mesh filename="${meshdir}/${hip_meshfile}.stl" />
+            </xacro:if>
+            <xacro:unless value="${side_sign[leg-1] == 1}">
+              <mesh filename="${meshdir}/${hip_meshfile}_mirror.stl" />
+            </xacro:unless>
+          </geometry>
+        </xacro:if>
+        <xacro:unless value="${use_mesh_file == 1}">
+          <origin xyz="0 0 ${-hip_length/2}" rpy="0 0 0" />
+          <geometry>
+            <cylinder radius="${hip_radius}" length="${hip_length}"/>
+          </geometry>
+        </xacro:unless>
+      </collision>
+    </link>
+
+
+    <joint name="${robot_namespace}/knee_${leg}_joint" type="revolute" >
+
+      <!-- knee_joint_origin -->
+      <origin xyz="${knee_joint_origin[0]} ${side_sign[leg-1]*knee_joint_origin[1]} ${knee_joint_origin[2]}" rpy="0 0 0" />    
+      <limit lower="${joint_limit_lower_knee}" upper="${joint_limit_upper_knee}" effort="1e3" velocity="1e3"/>
+      <dynamics damping="${joint_damping}" friction="${joint_friction}" /> 
+
+      <axis xyz="0 ${knee_axis_sign} 0" /> 
+      <parent link="${robot_namespace}/hip_${leg}" />
+      <child link="${robot_namespace}/knee_${leg}" />
+
+    </joint>
+
+
+    <link name="${robot_namespace}/knee_${leg}">
+      <inertial>
+        <origin xyz="${knee_com_origin[0]} ${side_sign[leg-1]*knee_com_origin[1]} ${knee_com_origin[2]}" rpy="0 0 0" /> 
+        <mass value="${knee_mass}" /> 
+        <xacro:if value="${use_simple_inertia == 0}">
+        <inertia  ixx="${knee_inertia_at_com[0]}" ixy="${side_sign[leg-1]*knee_inertia_at_com[1]}" 
+                  ixz="${knee_inertia_at_com[2]}" iyy="${knee_inertia_at_com[3]}" 
+                  iyz="${side_sign[leg-1]*knee_inertia_at_com[4]}" izz="${knee_inertia_at_com[5]}" />  
+      </xacro:if>
+      <xacro:unless value="${use_simple_inertia == 0}">
+          <!-- Inertia tensor for a cylinder -->
+        <inertia
+          ixx="${(1/12) * knee_mass * (3 * knee_radius**2 + knee_length**2)}"
+          ixy="0.0"
+          ixz="0.0"
+          iyy="${(1/12) * knee_mass * (3 * knee_radius**2 + knee_length**2)}"
+          iyz="0.0"
+          izz="${(1/2) * knee_mass * knee_radius**2}"  />
+      </xacro:unless>
+      </inertial>
+
+      <visual>
+        <xacro:if value="${use_mesh_file == 1}">
+          <origin xyz="0 0 0" rpy="${knee_mesh_rpy[0]} ${knee_mesh_rpy[1]} ${knee_mesh_rpy[2]}" />
+          <geometry>
+            <xacro:if value="${side_sign[leg-1] == 1}">
+              <mesh filename="${meshdir}/${knee_meshfile}.stl" />
+            </xacro:if>
+            <xacro:unless value="${side_sign[leg-1] == 1}">
+              <mesh filename="${meshdir}/${knee_meshfile}_mirror.stl" />
+            </xacro:unless>
+            </geometry>
+        </xacro:if>
+        <xacro:unless value="${use_mesh_file == 1}">
+          <origin xyz="0 0 ${-knee_length/2}" rpy="0 0 0.0" />
+          <geometry>
+            <cylinder radius="${knee_radius}" length="${knee_length}"/>
+            </geometry>
+        </xacro:unless>        
+  
+        <material name="green"/>
+      </visual> 
+      <collision>
+          <xacro:if value="${use_mesh_file == 1}">
+                  <origin xyz="0 0 0" rpy="${knee_mesh_rpy[0]} ${knee_mesh_rpy[1]} ${knee_mesh_rpy[2]}" />
+
+                  <geometry>
+            <xacro:if value="${side_sign[leg-1] == 1}">
+              <mesh filename="${meshdir}/${knee_meshfile}.stl" />
+            </xacro:if>
+            <xacro:unless value="${side_sign[leg-1] == 1}">
+              <mesh filename="${meshdir}/${knee_meshfile}_mirror.stl" />
+            </xacro:unless>
+          </geometry>
+
+          </xacro:if>
+          <xacro:unless value="${use_mesh_file == 1}">
+          <origin xyz="0 0 ${-knee_length/2}" rpy="0 0 0.0" />
+          <geometry>
+
+            <cylinder radius="${knee_radius}" length="${knee_length}"/>
+          </geometry>
+
+          </xacro:unless>          
+      </collision>
+    </link>
+
+    <joint name="${robot_namespace}/foot_${leg}_joint" type="fixed" >
+      <!-- foot_joint_origin -->
+      <origin xyz="${foot_joint_origin[0]} ${side_sign[leg-1]*foot_joint_origin[1]} ${foot_joint_origin[2]}" rpy="0 0 0" />  
+      <parent link="${robot_namespace}/knee_${leg}" />
+      <child link="${robot_namespace}/foot_${leg}" />
+    </joint>
+
+
+    <link name="${robot_namespace}/foot_${leg}">
+      <inertial>
+        <!-- foot_link_origin -->
+        <origin xyz="${foot_com_origin[0]} ${side_sign[leg-1]*foot_com_origin[1]} ${foot_com_origin[2]}" rpy="0 0 0" /> 
+        <mass value="${foot_mass}" />
+        <!-- foot_inertia_at_com -->
+        <inertia  ixx="${foot_inertia_at_com[0]}" ixy="${foot_inertia_at_com[1]}" 
+                  ixz="${foot_inertia_at_com[2]}" iyy="${foot_inertia_at_com[3]}" 
+                  iyz="${foot_inertia_at_com[4]}" izz="${foot_inertia_at_com[5]}" /> 
+      </inertial>
+
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <xacro:if value="${use_mesh_file == 1}">
+            <mesh filename="${meshdir}/${foot_meshfile}.stl" />  
+          </xacro:if>
+          <xacro:unless value="${use_mesh_file == 1 or use_sphere_feet == 0}">
+            <sphere radius="${foot_radius}" />  
+          </xacro:unless>          
+        </geometry>
+        <material name="black"/>
+      </visual> 
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <xacro:if value="${use_mesh_file == 1 and use_sphere_feet == 0}">
+            <mesh filename="${meshdir}/${foot_meshfile}.stl" />  
+          </xacro:if>
+          <xacro:unless value="${use_mesh_file == 1 and use_sphere_feet == 0}">
+            <sphere radius="${foot_radius}" />  
+          </xacro:unless>         
+        </geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+</robot>

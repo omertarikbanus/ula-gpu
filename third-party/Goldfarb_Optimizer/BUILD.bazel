@@ -1,0 +1,19 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# QuadProg++ (Goldfarb-Idnani dense QP solver), used by WBIC.
+# Included as <Goldfarb_Optimizer/QuadProg++.hh>.
+cc_library(
+    name = "goldfarb",
+    srcs = [
+        "Array.cc",
+        "QuadProg++.cc",
+    ],
+    hdrs = [
+        "Array.hh",
+        "QuadProg++.hh",
+    ],
+    include_prefix = "Goldfarb_Optimizer",
+    deps = ["@eigen"],
+)
