@@ -42,3 +42,10 @@ target_compile_options(ula_core PUBLIC -DEIGEN_DONT_VECTORIZE)
 
 add_executable(core_demo src/core_demo.cc)
 target_link_libraries(core_demo PRIVATE ula_core)
+
+add_executable(parity_dump tools/parity_dump.cc)
+target_link_libraries(parity_dump PRIVATE ula_core)
+
+add_executable(alloc_audit tools/alloc_audit.cc)
+target_link_libraries(alloc_audit PRIVATE ula_core)
+target_link_options(alloc_audit PRIVATE -rdynamic)

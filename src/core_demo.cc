@@ -1,17 +1,14 @@
 // Standalone check of the controller core: build the Go2 floating-base model
-// from the URDF and exercise forward/inverse kinematics.
+// from the URDF and run one WBC tick from a standing pose.
 //
-// This is the parity harness for the standalone core: run it here and in ula
-// with the same controller sources and compare the numbers. A WBC tick from a
-// fixed stance command is the next step (see docs/CONTEXT.md).
+// The full input/output sweep a GPU build is checked against is
+// tools/parity_dump.cc; this demo is the readable single-tick version.
 #include <cstdio>
 #include <cmath>
-#include <random>
 
 #include "dynamics/Quadruped.h"
 #include "dynamics/ParseURDFtoQuadruped.h"
-#include "dynamics/QuadrupedKinematics.hh"
-#include "parameters/QuadrupedParams.hh"
+#include "core/WbcHarness.hh"
 
 using T = float;
 
@@ -27,54 +24,76 @@ int main(int argc, char** argv) {
   }
   FloatingBaseModel<T> model;
   quad.buildModel(model);
-  std::printf("model: nDof=%zu	nq=%d	mass=%.3f hip_links=%.3f/%.3f/%.3f\n",
-              static_cast<size_t>(model._nDof), cheetah::num_q,
+  std::printf("model: nDof=%zu nq=%zu mass=%.3f hip_links=%.3f/%.3f/%.3f\n",
+              static_cast<size_t>(model._nDof), static_cast<size_t>(cheetah::num_q),
               static_cast<double>(quad._bodyMass),
               static_cast<double>(quad._abadLinkLength),
               static_cast<double>(quad._hipLinkLength),
               static_cast<double>(quad._kneeLinkLength));
 
+  // --- one WBC tick: standing crouch at rest -------------------------------
+  {
+    wbch::Harness h;
+    if (!h.init(urdf)) { std::printf("urdf parse failed (harness)\n"); return 1; }
+    wbch::T leg[3];
+    h.stanceJoints(0.32f, leg);
+    wbch::TickInput in{};
+    wbch::TickOutput out{};
+    for (int l = 0; l < 4; ++l)
+      for (int j = 0; j < 3; ++j) in.q[3 * l + j] = leg[j];
+    in.pos[2] = 0.32f;
+    in.quat[0] = 1.f;
+    for (int l = 0; l < 4; ++l) {
+      in.contact[l] = 1.f;
+      in.Fr_des[l][2] = h.total_mass * 9.81f / 4.f;  // as SupervisorStates BalanceStand
+    }
+    in.pBody_des[2] = 0.32f;
+    h.tick(in, out);
+
+    std::printf("wbc: stance leg q = (%.4f, %.4f, %.4f), total mass %.3f kg, Fz_des/leg %.3f N\n",
+                leg[0], leg[1], leg[2], h.total_mass, in.Fr_des[0][2]);
+    const char* nm[4] = {"FR", "FL", "HR", "HL"};
+    bool finite = true;
+    double checksum = 0;
+    for (int l = 0; l < 4; ++l) {
+      std::printf("wbc %s: qDes %8.4f %8.4f %8.4f | qdDes %8.4f %8.4f %8.4f | tauFF %8.4f %8.4f %8.4f | Fr %8.3f %8.3f %8.3f\n",
+                  nm[l], out.qDes[3*l], out.qDes[3*l+1], out.qDes[3*l+2],
+                  out.qdDes[3*l], out.qdDes[3*l+1], out.qdDes[3*l+2],
+                  out.tauFF[3*l], out.tauFF[3*l+1], out.tauFF[3*l+2],
+                  out.Fr[3*l], out.Fr[3*l+1], out.Fr[3*l+2]);
+    }
+    const wbch::T* arrs[5] = {out.qDes, out.qdDes, out.tauFF, out.Fr, out.qddot};
+    const int lens[5] = {12, 12, 12, 12, 18};
+    for (int a = 0; a < 5; ++a)
+      for (int i = 0; i < lens[a]; ++i) {
+        if (!std::isfinite(arrs[a][i])) finite = false;
+        checksum += static_cast<double>(arrs[a][i]) * (1 + 0.001 * (a * 18 + i));
+      }
+    double fz = 0;
+    for (int l = 0; l < 4; ++l) fz += out.Fr[3 * l + 2];
+    std::printf("wbc: sum Fz = %.3f N (weight %.3f N), all finite = %s, checksum = %.6f\n",
+                fz, h.total_mass * 9.81, finite ? "yes" : "NO", checksum);
+  }
+
   FBModelState<T> state;
   state.bodyOrientation = Quat<T>(1, 0, 0, 0);
   state.bodyPosition = Vec3<T>(0, 0, 0.32);
   state.bodyVelocity = SVec<T>::Zero();
-  state.q = DVec<T>::Zero(cheetah::num_q);
-  state.qd = DVec<T>::Zero(cheetah::num_q);
-  // The URDF build has 12 leg joints after the 6 floating-base coordinates
-  // (nDof = 18), so leg joints start at q[6].
-  const int q0 = cheetah::num_q - 12;
+  state.q = DVec<T>::Zero(12);
+  state.qd = DVec<T>::Zero(12);
+  // FBModelState::q holds the 12 leg joints only (the base is separate).
+  const int q0 = 0;
   const T stand[3] = {static_cast<T>(0), static_cast<T>(-0.8), static_cast<T>(1.6)};
   for (int leg = 0; leg < 4; ++leg)
     for (int j = 0; j < 3; ++j) state.q[q0 + 3 * leg + j] = stand[j];
   model.setState(state);
 
   model.forwardKinematics();
-  model.forwardKinematics();
+  model.massMatrix();  // getMassMatrix() only returns the cache massMatrix() fills
   double hmax = 0.0;
   for (int i = 0; i < model.getMassMatrix().rows(); ++i)
     hmax = std::max(hmax, std::fabs(static_cast<double>(model.getMassMatrix()(i, i))));
-  std::printf("model: max |H_ii| after one FK pass = %.6f\n", hmax);
+  std::printf("model: max |H_ii| after massMatrix() = %.6f\n", hmax);
 
-  // --- forward / inverse kinematics round trip -----------------------------
-  // forwardKinematics returns the foot position relative to the hip (the robot
-  // runtime compares against hip-relative points); inverseKinematics expects a
-  // body-frame target and subtracts the hip itself.
-  const auto kin_params = quadruped::createGo2Config();
-  QuadrupedKinematics kin(kin_params);
-  std::mt19937 rng(7);
-  std::uniform_real_distribution<double> dist(-0.5, 0.5);
-  double max_err = 0.0;
-  for (int leg = 0; leg < QuadrupedKinematics::NUM_LEGS; ++leg) {
-    for (int i = 0; i < 25; ++i) {
-      Eigen::Vector3d q(dist(rng), dist(rng) - 0.5236, dist(rng) - 1.5);
-      Eigen::Vector3d p_rel, q2, p2_rel;
-      const Eigen::Vector3d hip = kin_params.hip_positions.row(leg).transpose();
-      if (!kin.forwardKinematics(leg, q, p_rel)) continue;
-      if (!kin.inverseKinematics(leg, p_rel + hip, q2)) continue;
-      kin.forwardKinematics(leg, q2, p2_rel);
-      max_err = std::max(max_err, (p_rel - p2_rel).norm());
-    }
-  }
-  std::printf("kinematics: max round-trip error (hip frame) %.3e\n", max_err);
   return 0;
 }
