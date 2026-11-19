@@ -1,0 +1,17 @@
+# GPU benchmark image for ula-gpu (MJX + MuJoCo Warp). Build from the repo root:
+#   docker build -f docker/Dockerfile.gpu -t ula-gpu-bench .
+FROM nvidia/cuda:12.6.3-devel-ubuntu24.04
+ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1
+# Ubuntu 24.04 ships Python 3.12 (jax 0.12.x needs >= 3.12).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3.12 python3.12-venv python3-pip git ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN python3.12 -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+RUN pip install "jax[cuda12]==0.12.1" "mujoco==3.11.0" "mujoco-mjx==3.11.0" \
+      "warp-lang==1.19.0" "mujoco_warp==3.11.0" pandas
+WORKDIR /work/ula-gpu
+COPY bench/ bench/
+COPY models/go2/scene_gpu.xml models/go2/robot_gpu.xml models/go2/
+# Run from /tmp so MuJoCo's MUJOCO_LOG.TXT never lands in the mounted repo.
+WORKDIR /tmp
+CMD ["bash"]
