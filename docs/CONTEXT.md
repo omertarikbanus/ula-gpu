@@ -34,10 +34,14 @@ on the GPU.
 - The QP (WBIC uses Goldfarb QuadProg++, double only, heap-allocating) gets a
   fixed-storage, bounded-iteration float version of the same dual active-set
   algorithm, compiled for CPU and GPU.
-- GPU access: the owner's NVIDIA machine (one of the tailnet hosts in
-  `~/.ssh/config`; which one is not settled) and Google Colab for first tests.
-  The development laptop has no NVIDIA GPU, so GPU code is validated in CPU mode
-  here and benchmarked remotely.
+- GPU access: Google Colab, with the code uploaded as the small package made
+  by `bench/make_colab_tarball.sh` (no repository push). The owner's own NVIDIA
+  machine is set aside for now. The development laptop has no NVIDIA GPU, so GPU
+  code is validated in CPU mode here and run on Colab.
+- Training uses the Go2 with simple collision shapes (`models/go2/scene_gpu.xml`:
+  box body, capsule legs, unchanged foot spheres, identical masses and
+  inertias). MJX needs 24 GB for one step of the mesh scene and 0.5 GB for this
+  one. Trained policies are checked on ula's detailed mesh scene.
 
 ## Findings so far
 
