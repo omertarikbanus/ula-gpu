@@ -64,3 +64,11 @@ def append_results(path, recs):
             data = []
     data.extend(recs)
     p.write_text(json.dumps(data, indent=1))
+
+
+def failure(engine, device, variant, n, err):
+    """Record for a run that raised (e.g. out of GPU memory at a large N)."""
+    msg = f'{type(err).__name__}: {err}'.splitlines()[0][:300]
+    print(f'{engine:6s} {device:4s} {variant:10s} N={n:<7d} FAILED  {msg}', flush=True)
+    return dict(engine=engine, device=device, variant=variant, num_envs=n, error=msg,
+                gpu=gpu_info(), host=platform.node(), time=time.strftime('%Y-%m-%dT%H:%M:%S'))

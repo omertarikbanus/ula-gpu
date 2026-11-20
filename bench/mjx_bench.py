@@ -104,7 +104,14 @@ def main(argv=None):
         return jax.jit(rollout)
 
     recs = []
+
+    def keep(rec):
+        recs.append(rec)
+        C.append_results(args.results, [rec])  # written per run: a later failure loses nothing
+
     for n in C.parse_int_list(args.num_envs):
+      variants = [('physics', False)] + ([] if args.no_ctrl else [('ctrl-ph', True)])
+      try:
         key = jax.random.PRNGKey(args.seed)
         k1, k2, k3, k4 = jax.random.split(key, 4)
         ctrl = jax.random.uniform(k1, (n, m.nu), minval=-1.0, maxval=1.0) * limits
@@ -115,8 +122,12 @@ def main(argv=None):
         w1 = jax.random.normal(k3, (args.ctrl_dim, args.ctrl_dim), jnp.float32) / args.ctrl_dim ** 0.5
         w2 = jax.random.normal(k4, (args.ctrl_dim2, args.ctrl_dim2), jnp.float32) / args.ctrl_dim2 ** 0.5
 
-        variants = [('physics', False)] + ([] if args.no_ctrl else [('ctrl-ph', True)])
-        for name, with_ctrl in variants:
+      except Exception as e:  # e.g. out of memory while building the batch
+        for name, _ in variants:
+            keep(C.failure('mjx', args.device, name, n, e))
+        continue
+      for name, with_ctrl in variants:
+        try:
             fn = make_rollout(with_ctrl)
             t0 = time.perf_counter()
             jax.block_until_ready(fn(batch, w1, w2))
@@ -127,14 +138,15 @@ def main(argv=None):
                 qpos, _ = jax.block_until_ready(fn(batch, w1, w2))
                 best = min(best, time.perf_counter() - t0)
             ok = bool(jnp.all(jnp.isfinite(qpos)))
-            recs.append(C.report('mjx', args.device, name, n, K, best, m.opt.timestep,
-                                 extra=dict(compile_s=compile_s, finite=ok, scene=os.path.basename(args.scene),
-                                            jax=jax.__version__, mujoco=mujoco.__version__,
-                                            ctrl_dim=args.ctrl_dim, ctrl_dim2=args.ctrl_dim2,
-                                            ctrl_ops=args.ctrl_ops if with_ctrl else 0)))
+            keep(C.report('mjx', args.device, name, n, K, best, m.opt.timestep,
+                          extra=dict(compile_s=compile_s, finite=ok, scene=os.path.basename(args.scene),
+                                     jax=jax.__version__, mujoco=mujoco.__version__,
+                                     ctrl_dim=args.ctrl_dim, ctrl_dim2=args.ctrl_dim2,
+                                     ctrl_ops=args.ctrl_ops if with_ctrl else 0)))
             if not ok:
                 print('  warning: non-finite qpos', flush=True)
-    C.append_results(args.results, recs)
+        except Exception as e:  # e.g. out of GPU memory at this N
+            keep(C.failure('mjx', args.device, name, n, e))
     return recs
 
 

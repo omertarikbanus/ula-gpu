@@ -43,8 +43,10 @@ def parse_args(argv=None):
     p.add_argument('--ctrl-dim', type=int, default=18)
     p.add_argument('--ctrl-dim2', type=int, default=12)
     p.add_argument('--ctrl-ops', type=int, default=4, help='matmuls of each size per physics step')
-    p.add_argument('--nconmax', type=int, default=16, help='contacts allocated per world')
-    p.add_argument('--njmax', type=int, default=96, help='constraint rows allocated per world')
+    # A fallen robot touches the ground with feet, legs and body: up to about 24
+    # contacts, 4 constraint rows each (pyramidal cone), plus joint limits.
+    p.add_argument('--nconmax', type=int, default=32, help='contacts allocated per world')
+    p.add_argument('--njmax', type=int, default=160, help='constraint rows allocated per world')
     p.add_argument('--disturb', action='store_true', help='also apply a fixed random qfrc_applied per robot')
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--results', default=C.DEFAULT_RESULTS)
@@ -121,7 +123,13 @@ def main(argv=None):
         w1 = wp.array((rng.standard_normal((d1, d1)) / d1 ** 0.5).astype(np.float32), dtype=float)
         w2 = wp.array((rng.standard_normal((d2, d2)) / d2 ** 0.5).astype(np.float32), dtype=float)
 
+        def keep(rec):
+            recs.append(rec)
+            C.append_results(args.results, [rec])  # written per run: a later failure loses nothing
+
+        variants = [('physics', False)] + ([] if args.no_ctrl else [('ctrl-ph', True)])
         for n in C.parse_int_list(args.num_envs):
+          try:
             d = mjw.put_data(mjm, mjd, nworld=n, nconmax=args.nconmax, njmax=args.njmax)
             ctrl_np = (rng.uniform(-1, 1, (n, mjm.nu)) * limits).astype(np.float32)
             d.ctrl.assign(ctrl_np)
@@ -139,8 +147,12 @@ def main(argv=None):
                                   inputs=[w1, w2, a1, b1, a2, b2, d1, d2, ops, mjm.nu, d.ctrl])
                     mjw.step(m, d)
 
-            variants = [('physics', False)] + ([] if args.no_ctrl else [('ctrl-ph', True)])
-            for name, with_ctrl in variants:
+          except Exception as e:  # e.g. out of GPU memory while allocating N worlds
+            for name, _ in variants:
+                keep(C.failure('warp', args.device, name, n, e))
+            continue
+          for name, with_ctrl in variants:
+            try:
                 d.ctrl.assign(ctrl_np)  # undo drift from the placeholder
                 t0 = time.perf_counter()
                 run_loop(with_ctrl)  # warmup / kernel compile / contact-buffer touch
@@ -164,7 +176,7 @@ def main(argv=None):
                     best = min(best, time.perf_counter() - t0)
                 qpos = d.qpos.numpy()
                 ok = bool(np.isfinite(qpos).all())
-                recs.append(C.report('warp', args.device, name, n, K, best, mjm.opt.timestep,
+                keep(C.report('warp', args.device, name, n, K, best, mjm.opt.timestep,
                                      extra=dict(compile_s=compile_s, finite=ok, graph=use_graph,
                                                 scene=os.path.basename(args.scene),
                                                 warp=wp.config.version, mujoco=mujoco.__version__,
@@ -174,8 +186,9 @@ def main(argv=None):
                     print('  warning: non-finite qpos', flush=True)
                 if use_graph:
                     del graph
-            del d, a1, b1, a2, b2
-    C.append_results(args.results, recs)
+            except Exception as e:
+                keep(C.failure('warp', args.device, name, n, e))
+          del d, a1, b1, a2, b2
     return recs
 
 
