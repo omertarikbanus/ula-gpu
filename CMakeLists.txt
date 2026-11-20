@@ -13,6 +13,17 @@ if(CORE_SCALAR_FLOAT)
   add_compile_definitions(ULA_CORE_SCALAR_FLOAT)
 endif()
 
+# QP solver used by WBIC: quadprog = Goldfarb QuadProg++ (default, double,
+# heap), gi = src/qp/gi_qp.hh (fixed storage, bounded iterations, scalar type
+# of the controller).
+set(ULA_QP_SOLVER "quadprog" CACHE STRING "WBIC QP solver: quadprog or gi")
+set_property(CACHE ULA_QP_SOLVER PROPERTY STRINGS quadprog gi)
+if(ULA_QP_SOLVER STREQUAL "gi")
+  add_compile_definitions(ULA_QP_SOLVER_GI)
+elseif(NOT ULA_QP_SOLVER STREQUAL "quadprog")
+  message(FATAL_ERROR "ULA_QP_SOLVER must be quadprog or gi")
+endif()
+
 find_package(Eigen3 REQUIRED)
 
 file(GLOB_RECURSE CORE_SOURCES CONFIGURE_DEPENDS
@@ -44,8 +55,19 @@ add_executable(core_demo src/core_demo.cc)
 target_link_libraries(core_demo PRIVATE ula_core)
 
 add_executable(parity_dump tools/parity_dump.cc)
+target_include_directories(parity_dump PRIVATE tools)
 target_link_libraries(parity_dump PRIVATE ula_core)
 
 add_executable(alloc_audit tools/alloc_audit.cc)
 target_link_libraries(alloc_audit PRIVATE ula_core)
 target_link_options(alloc_audit PRIVATE -rdynamic)
+
+add_executable(qp_dump tools/qp_dump.cc)
+target_include_directories(qp_dump PRIVATE tools)
+target_link_libraries(qp_dump PRIVATE ula_core)
+
+add_executable(parity_compare tools/parity_compare.cc)
+
+add_executable(qp_check tools/qp_check.cc)
+target_include_directories(qp_check PRIVATE src third-party tools)
+target_link_libraries(qp_check PRIVATE goldfarb)

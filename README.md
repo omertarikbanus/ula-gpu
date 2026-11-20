@@ -15,11 +15,17 @@ src/core_demo.cc     one controller tick from a standing pose, printed
 tools/parity_dump.cc deterministic sweep of controller ticks written to a
                      binary file: the reference for a GPU build
 tools/alloc_audit.cc counts heap allocations per controller tick
+src/qp/gi_qp.hh      fixed-size float QP solver (same algorithm as QuadProg++),
+                     ready to compile for the GPU; docs/QP_SOLVER.md
+tools/qp_dump.cc, qp_check.cc, qp_cuda_check.cu, parity_compare.cc
+                     record the controller's QPs, check the new solver on CPU
+                     and GPU, compare two parity files
 bench/               GPU physics benchmarks (MJX and MuJoCo Warp), Colab notebook
 docker/Dockerfile.gpu    image for the GPU machine
 models/go2/          Go2 URDF and scenes (scene_gpu.xml: simple collision shapes)
 third-party/         vendored Goldfarb QuadProg++ and tinyxml2
-docs/                CONTEXT.md, CORE_STATUS.md (controller), GPU_BENCH.md (engines)
+docs/                CONTEXT.md, CORE_STATUS.md (controller), GPU_BENCH.md (engines),
+                     QP_SOLVER.md (the new QP solver)
 ```
 
 ## Controller core
@@ -32,7 +38,11 @@ cmake -S . -B build && cmake --build build -j6
 ./build/core_demo models/go2/go2.urdf
 ./build/parity_dump models/go2/go2.urdf /tmp/parity.bin   # fnv1a64 58a2b3ac27ab48cd
 ./build/alloc_audit models/go2/go2.urdf
+./build/qp_dump models/go2/go2.urdf /tmp/wbic.qp && ./build/qp_check /tmp/wbic.qp
 ```
+
+`-DULA_QP_SOLVER=gi` builds the controller with the new float QP solver instead
+of QuadProg++ (default).
 
 ## GPU physics benchmark
 
@@ -43,8 +53,8 @@ See [`docs/GPU_BENCH.md`](docs/GPU_BENCH.md): the Colab notebook
 ## Next steps
 
 1. Run the engine benchmark on a GPU and pick the engine.
-2. Make the controller core allocation-free and fixed-size, and replace the
-   QuadProg++ QP (double only) with a fixed-storage, bounded-iteration float
-   version of the same algorithm (see `docs/CORE_STATUS.md`).
+2. Make the rest of the controller core allocation-free and fixed-size (see
+   `docs/CORE_STATUS.md`). The QP solver part is done (`src/qp/gi_qp.hh`); it
+   still needs a GPU run on Colab and a broader sweep of harder QPs.
 3. Compile the core as a batched GPU kernel (one robot per thread) and check it
    against `tools/parity_dump.cc`.

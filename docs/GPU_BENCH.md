@@ -38,8 +38,9 @@ pose = standing (abad 0, hip -0.8, knee 1.6, base z 0.32), float32.
 ## Colab first
 
 1. On the laptop: `bench/make_colab_tarball.sh` -> `/tmp/opencode/ula-gpu-bench.tar.gz`
-   (small, ~12 KB, no meshes needed), or push the repo and use `git clone` (a private
-   repo needs a token in the URL).
+   (no meshes needed; it also carries the float QP solver check and the QPs recorded
+   from the controller, see docs/QP_SOLVER.md), or push the repo and use `git clone`
+   (a private repo needs a token in the URL).
 2. Colab: Runtime > GPU, open `bench/colab_bench.ipynb`, set `REPO_URL` or upload the
    tarball (option B), Run all. Needs Python >= 3.12 (jax 0.12.x pin); if the Colab
    image is older, lower the jax pin (and keep mujoco/mjx/mujoco_warp equal).

@@ -3,6 +3,7 @@
 
 #include <utilities/Utilities_print.h>
 #include <Goldfarb_Optimizer/QuadProg++.hh>
+#include <controllers/wbc/WBIC/QpRecorder.hpp>
 #include <controllers/wbc/ContactSpec.hpp>
 #include <controllers/wbc/Task.hpp>
 #include <controllers/wbc/WBC.hpp>
@@ -47,6 +48,7 @@ class WBIC : public WBC<T> {
   void _GetSolution(const DVec<T>& qddot, DVec<T>& cmd);
   void _SetCost();
   void _SetOptimizationSize();
+  T _SolveQP();  // QuadProg++ (default) or the fixed-storage port (ULA_QP_SOLVER=gi)
 
   size_t _dim_opt;      // Contact pt delta, First task delta, reaction force
   size_t _dim_eq_cstr;  // equality constraints

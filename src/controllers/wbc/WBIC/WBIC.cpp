@@ -3,6 +3,10 @@
 #include <Eigen/SVD>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#ifdef ULA_QP_SOLVER_GI
+#include "qp/gi_qp.hh"
+#endif
 
   template <typename T>
 WBIC<T>::WBIC(size_t num_qdot, const std::vector<ContactSpec<T>*>* contact_list,
@@ -83,7 +87,7 @@ void WBIC<T>::MakeTorque(DVec<T>& cmd, void* extra_input) {
 
   // Optimization
   // Timer timer;
-  T f = solve_quadprog(G, g0, CE, ce0, CI, ci0, z);
+  T f = _SolveQP();
   // std::cout<<"\n wbic old time: "<<timer.getMs()<<std::endl;
   // bool z_finite = true;
   // for (size_t i = 0; i < _dim_opt; ++i) {
@@ -333,6 +337,39 @@ void WBIC<T>::UpdateSetting(const DMat<T>& A, const DMat<T>& Ainv,
   WB::b_updatesetting_ = true;
 
   (void)extra_setting;
+}
+
+template <typename T>
+T WBIC<T>::_SolveQP() {
+  const int n = G.ncols(), p = CE.ncols(), m = CI.ncols();
+  WbicQpRecorder* rec = wbicQpRecorder();
+  if (rec) rec->problem(n, p, m, &G[0][0], &g0[0], &CE[0][0], &ce0[0], &CI[0][0], &ci0[0]);
+#ifdef ULA_QP_SOLVER_GI
+  // Fixed-storage Goldfarb-Idnani port in the controller's scalar type.
+  // Capacities: n <= 6 + 3*4, p = 6, m <= 6*4 (see docs/QP_SOLVER.md).
+  using Ws = ula::qp::Workspace<T, 18, 6, 24>;
+  Ws ws;
+  T Gt[18 * 18], g0t[18], CEt[18 * 6], ce0t[6], CIt[18 * 24], ci0t[24], xt[18];
+  auto cp = [](T* dst, const GolDIdnani::GMatr<double>& a, int rows, int cols) {
+    for (int i = 0; i < rows; ++i)
+      for (int j = 0; j < cols; ++j) dst[i * cols + j] = static_cast<T>(a[i][j]);
+  };
+  auto cv = [](T* dst, const GolDIdnani::GVect<double>& a, int len) {
+    for (int i = 0; i < len; ++i) dst[i] = static_cast<T>(a[i]);
+  };
+  cp(Gt, G, n, n); cv(g0t, g0, n); cp(CEt, CE, n, p); cv(ce0t, ce0, p);
+  cp(CIt, CI, n, m); cv(ci0t, ci0, m);
+  const ula::qp::Result<T> res =
+      ula::qp::solve(ws, n, p, m, Gt, g0t, CEt, ce0t, CIt, ci0t, xt);
+  z.resize(n);
+  for (int i = 0; i < n; ++i) z[i] = xt[i];
+  const double f = res.status == ula::qp::kOk ? static_cast<double>(res.f)
+                                              : std::numeric_limits<double>::infinity();
+#else
+  const double f = solve_quadprog(G, g0, CE, ce0, CI, ci0, z);
+#endif
+  if (rec) rec->solution(f, &z[0], n);
+  return static_cast<T>(f);
 }
 
 template <typename T>
