@@ -20,7 +20,8 @@ src/qp/gi_qp.hh      fixed-size float QP solver (same algorithm as QuadProg++),
 tools/qp_dump.cc, qp_check.cc, qp_cuda_check.cu, parity_compare.cc
                      record the controller's QPs, check the new solver on CPU
                      and GPU, compare two parity files
-bench/               GPU physics benchmarks (MJX and MuJoCo Warp), Colab notebook
+bench/               reusable physics, training, evaluation and Colab tools
+bench/artifacts/     ignored local checkpoints and generated results
 docker/Dockerfile.gpu    image for the GPU machine
 models/go2/          Go2 URDF and scenes (scene_gpu.xml: simple collision shapes)
 third-party/         vendored Goldfarb QuadProg++ and tinyxml2
@@ -44,6 +45,18 @@ cmake -S . -B build && cmake --build build -j6
 `-DULA_QP_SOLVER=gi` builds the controller with the new float QP solver instead
 of QuadProg++ (default).
 
+Run the CPU regression checks with `ctest --test-dir build --output-on-failure`.
+[`docs/CONTROLLER_REPLAY.md`](docs/CONTROLLER_REPLAY.md) shows how to reproduce
+the policy-free Go2 CPU parity check against ULA. Unlike the isolated WBC and
+QP sweeps, it starts at reset with scripted actions and checks through to the
+first simulator motor command on each tick.
+
+[`docs/CUDA_REPLAY.md`](docs/CUDA_REPLAY.md) describes how to run the full,
+batched controller on the recorded trace. It uses Eigen for the GPU operations
+Eigen supports, cuBLAS for the mass-matrix inverse, and cuSOLVER for the
+Jacobi SVD. A separate MuJoCo Warp smoke test checks stand, walk and turn.
+The self-contained Colab notebook runs both checks and short benchmarks.
+
 ## GPU physics benchmark
 
 See [`docs/GPU_BENCH.md`](docs/GPU_BENCH.md): the Colab notebook
@@ -52,9 +65,8 @@ See [`docs/GPU_BENCH.md`](docs/GPU_BENCH.md): the Colab notebook
 
 ## Next steps
 
-1. Run the engine benchmark on a GPU and pick the engine.
-2. Make the rest of the controller core allocation-free and fixed-size (see
-   `docs/CORE_STATUS.md`). The QP solver part is done (`src/qp/gi_qp.hh`); it
-   still needs a GPU run on Colab and a broader sweep of harder QPs.
-3. Compile the core as a batched GPU kernel (one robot per thread) and check it
-   against `tools/parity_dump.cc`.
+See [training results](docs/PPO_SMOKE.md) for the completed single-seed
+comparison and its limitations. The policy runs at 100 Hz, holding each
+action for five 500 Hz controller ticks with 1 ms physics substeps.
+[The benchmark index](bench/README.md) describes the retained tools and
+local artifact layout. Native-simulator transfer remains unverified.

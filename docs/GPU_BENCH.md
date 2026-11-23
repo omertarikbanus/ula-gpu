@@ -44,7 +44,7 @@ pose = standing (abad 0, hip -0.8, knee 1.6, base z 0.32), float32.
 2. Colab: Runtime > GPU, open `bench/colab_bench.ipynb`, set `REPO_URL` or upload the
    tarball (option B), Run all. Needs Python >= 3.12 (jax 0.12.x pin); if the Colab
    image is older, lower the jax pin (and keep mujoco/mjx/mujoco_warp equal).
-3. Download `results_colab.json`, put it in `bench/`.
+3. Download `results_colab.json` into the ignored `bench/artifacts/` directory.
 
 ## Owner's GPU machine
 
@@ -53,8 +53,8 @@ cd ~/ula-gpu                      # repo root
 docker build -f docker/Dockerfile.gpu -t ula-gpu-bench .
 docker run --rm --gpus all -v "$PWD/bench:/work/ula-gpu/bench" ula-gpu-bench bash -c '
   nvidia-smi -L &&
-  python /work/ula-gpu/bench/mjx_bench.py  --device gpu --num-envs 1024,4096,16384,65536 --steps 200 --results /work/ula-gpu/bench/results_gpu.json &&
-  python /work/ula-gpu/bench/warp_bench.py --device gpu --num-envs 1024,4096,16384,65536 --steps 200 --results /work/ula-gpu/bench/results_gpu.json 2>&1 | grep -v "^Module"'
+  python /work/ula-gpu/bench/mjx_bench.py  --device gpu --num-envs 1024,4096,16384,65536 --steps 200 --results /work/ula-gpu/bench/artifacts/results_gpu.json &&
+  python /work/ula-gpu/bench/warp_bench.py --device gpu --num-envs 1024,4096,16384,65536 --steps 200 --results /work/ula-gpu/bench/artifacts/results_gpu.json 2>&1 | grep -v "^Module"'
 ```
 Requires the NVIDIA driver plus nvidia-container-toolkit on the host (driver must
 support CUDA 12.6). Memory: watch `nvidia-smi --query-gpu=memory.used --format=csv -l 1`

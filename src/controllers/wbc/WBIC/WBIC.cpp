@@ -4,9 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#ifdef ULA_QP_SOLVER_GI
-#include "qp/gi_qp.hh"
-#endif
+#include <stdexcept>
 
   template <typename T>
 WBIC<T>::WBIC(size_t num_qdot, const std::vector<ContactSpec<T>*>* contact_list,
@@ -28,7 +26,7 @@ void WBIC<T>::MakeTorque(DVec<T>& cmd, void* extra_input) {
 
   // resize G, g0, CE, ce0, CI, ci0
   _SetOptimizationSize();
-  _SetCost();
+  if (!_qp_dispatch.run) _SetCost();
 
   DVec<T> qddot_pre;
   DMat<T> JcBar;
@@ -39,7 +37,7 @@ void WBIC<T>::MakeTorque(DVec<T>& cmd, void* extra_input) {
     _ContactBuilding();
 
     // Set inequality constraints
-    _SetInEqualityConstraint();
+    if (!_qp_dispatch.run) _SetInEqualityConstraint();
     WB::_WeightedInverse(_Jc, WB::Ainv_, JcBar);
     qddot_pre = JcBar * (-_JcDotQdot);
     Npre = _eye - JcBar * _Jc;
@@ -78,6 +76,10 @@ void WBIC<T>::MakeTorque(DVec<T>& cmd, void* extra_input) {
   }
 
   // Set equality constraints
+  if (_qp_dispatch.run) {
+    _SolveStaged(qddot_pre, cmd);
+    return;
+  }
   _SetEqualityConstraint(qddot_pre);
 
   // printf("G:\n");
@@ -87,7 +89,7 @@ void WBIC<T>::MakeTorque(DVec<T>& cmd, void* extra_input) {
 
   // Optimization
   // Timer timer;
-  T f = _SolveQP();
+  _SolveQPAndRecover(qddot_pre, cmd);
   // std::cout<<"\n wbic old time: "<<timer.getMs()<<std::endl;
   // bool z_finite = true;
   // for (size_t i = 0; i < _dim_opt; ++i) {
@@ -112,8 +114,6 @@ void WBIC<T>::MakeTorque(DVec<T>& cmd, void* extra_input) {
   // }
 
   // pretty_print(qddot_pre, std::cout, "qddot_cmd");
-  for (size_t i(0); i < _dim_floating; ++i) qddot_pre[i] += z[i];
-  _GetSolution(qddot_pre, cmd);
 
   // Sanity: prevent huge/invalid torques from propagating downstream.
   // {
@@ -340,36 +340,84 @@ void WBIC<T>::UpdateSetting(const DMat<T>& A, const DMat<T>& Ainv,
 }
 
 template <typename T>
-T WBIC<T>::_SolveQP() {
+void WBIC<T>::_SolveStaged(const DVec<T>& qddot_pre, DVec<T>& cmd) {
+  using B = ula::qp::WbicTorqueProblem<T>;
+  if (qddot_pre.size() != B::Dof || WB::num_act_joint_ != B::Joints ||
+      _dim_floating != B::Base || _dim_rf > B::MaxContact || _dim_Uf > B::MaxIneq) {
+    throw std::runtime_error("WBIC replay only supports the 12-joint Go2 model");
+  }
+  if (wbicQpRecorder()) throw std::runtime_error("Record the QP with the reference CPU path");
+
+  B in{};
+  in.contact_rows = _dim_rf;
+  in.inequality_rows = _dim_Uf;
+  for (int i = 0; i < B::Dof; ++i) {
+    in.acceleration_pre[i] = qddot_pre[i];
+    in.gravity[i] = WB::grav_[i];
+    in.coriolis[i] = WB::cori_[i];
+    for (int j = 0; j < B::Dof; ++j) in.mass[i][j] = WB::A_(i, j);
+    for (size_t j = 0; j < _dim_rf; ++j) in.contact_transpose[i][j] = _Jc(j, i);
+  }
+  for (int i = 0; i < B::Base; ++i) in.cost[i] = _data->_W_floating[i];
+  for (size_t i = 0; i < _dim_rf; ++i) {
+    in.cost[B::Base + i] = _data->_W_rf[i];
+    in.desired_force[i] = _Fr_des[i];
+  }
+  for (size_t i = 0; i < _dim_Uf; ++i) {
+    in.force_lower_bound[i] = _Uf_ieq_vec[i];
+    for (size_t j = 0; j < _dim_rf; ++j) in.force_constraint[i][j] = _Uf(i, j);
+  }
+  ula::qp::WbicTorqueSolution<T> result{};
+  _qp_dispatch.run(_qp_dispatch.context, in, result);
+  _data->_opt_result.resize(_dim_opt);
+  _data->_qddot.resize(B::Dof);
+  _data->_Fr.resize(_dim_rf);
+  cmd.resize(B::Joints);
+  for (size_t i = 0; i < _dim_opt; ++i) _data->_opt_result[i] = result.qp.x[i];
+  for (int i = 0; i < B::Dof; ++i) _data->_qddot[i] = result.acceleration[i];
+  for (size_t i = 0; i < _dim_rf; ++i) _data->_Fr[i] = result.force[i];
+  for (int i = 0; i < B::Joints; ++i) cmd[i] = result.torque[i];
+}
+
+template <typename T>
+void WBIC<T>::_SolveQPAndRecover(DVec<T>& qddot_pre, DVec<T>& cmd) {
   const int n = G.ncols(), p = CE.ncols(), m = CI.ncols();
   WbicQpRecorder* rec = wbicQpRecorder();
   if (rec) rec->problem(n, p, m, &G[0][0], &g0[0], &CE[0][0], &ce0[0], &CI[0][0], &ci0[0]);
 #ifdef ULA_QP_SOLVER_GI
-  // Fixed-storage Goldfarb-Idnani port in the controller's scalar type.
-  // Capacities: n <= 6 + 3*4, p = 6, m <= 6*4 (see docs/QP_SOLVER.md).
-  using Ws = ula::qp::Workspace<T, 18, 6, 24>;
-  Ws ws;
-  T Gt[18 * 18], g0t[18], CEt[18 * 6], ce0t[6], CIt[18 * 24], ci0t[24], xt[18];
-  auto cp = [](T* dst, const GolDIdnani::GMatr<double>& a, int rows, int cols) {
-    for (int i = 0; i < rows; ++i)
-      for (int j = 0; j < cols; ++j) dst[i * cols + j] = static_cast<T>(a[i][j]);
-  };
-  auto cv = [](T* dst, const GolDIdnani::GVect<double>& a, int len) {
-    for (int i = 0; i < len; ++i) dst[i] = static_cast<T>(a[i]);
-  };
-  cp(Gt, G, n, n); cv(g0t, g0, n); cp(CEt, CE, n, p); cv(ce0t, ce0, p);
-  cp(CIt, CI, n, m); cv(ci0t, ci0, m);
-  const ula::qp::Result<T> res =
-      ula::qp::solve(ws, n, p, m, Gt, g0t, CEt, ce0t, CIt, ci0t, xt);
-  z.resize(n);
-  for (int i = 0; i < n; ++i) z[i] = xt[i];
-  const double f = res.status == ula::qp::kOk ? static_cast<double>(res.f)
-                                              : std::numeric_limits<double>::infinity();
+  constexpr bool use_fixed = true;
 #else
-  const double f = solve_quadprog(G, g0, CE, ce0, CI, ci0, z);
+  constexpr bool use_fixed = false;
 #endif
+  double f;
+  if (use_fixed) {
+    using B = ula::qp::WbicProblem<T>;
+    if (n < 1 || n > B::N || p < 0 || p > B::P || m < 0 || m > B::M)
+      throw std::runtime_error("WBIC QP exceeds fixed-storage capacities");
+    B in{};
+    in.n = n;
+    in.p = p;
+    in.m = m;
+    auto cp = [](T* dst, const GolDIdnani::GMatr<double>& a, int rows, int cols) {
+      for (int i = 0; i < rows; ++i)
+        for (int j = 0; j < cols; ++j) dst[i * cols + j] = static_cast<T>(a[i][j]);
+    };
+    auto cv = [](T* dst, const GolDIdnani::GVect<double>& a, int len) {
+      for (int i = 0; i < len; ++i) dst[i] = static_cast<T>(a[i]);
+    };
+    cp(in.G, G, n, n); cv(in.g0, g0, n); cp(in.CE, CE, n, p); cv(in.ce0, ce0, p);
+    cp(in.CI, CI, n, m); cv(in.ci0, ci0, m);
+    const auto sol = ula::qp::solve_wbic(in);
+    z.resize(n);
+    for (int i = 0; i < n; ++i) z[i] = sol.x[i];
+    f = sol.result.status == ula::qp::kOk ? static_cast<double>(sol.result.f)
+                                         : std::numeric_limits<double>::infinity();
+  } else {
+    f = solve_quadprog(G, g0, CE, ce0, CI, ci0, z);
+  }
   if (rec) rec->solution(f, &z[0], n);
-  return static_cast<T>(f);
+  for (size_t i = 0; i < _dim_floating; ++i) qddot_pre[i] += z[i];
+  _GetSolution(qddot_pre, cmd);
 }
 
 template <typename T>
@@ -385,21 +433,22 @@ void WBIC<T>::_SetOptimizationSize() {
   _dim_opt = _dim_floating + _dim_rf;
   _dim_eq_cstr = _dim_floating;
 
-  // Matrix Setting
-  G.resize(0., _dim_opt, _dim_opt);
-  g0.resize(0., _dim_opt);
-  CE.resize(0., _dim_opt, _dim_eq_cstr);
-  ce0.resize(0., _dim_eq_cstr);
-
-  // Eigen Matrix Setting
-  _dyn_CE = DMat<T>::Zero(_dim_eq_cstr, _dim_opt);
-  _dyn_ce0 = DVec<T>(_dim_eq_cstr);
+  if (!_qp_dispatch.run) {
+    G.resize(0., _dim_opt, _dim_opt);
+    g0.resize(0., _dim_opt);
+    CE.resize(0., _dim_opt, _dim_eq_cstr);
+    ce0.resize(0., _dim_eq_cstr);
+    _dyn_CE = DMat<T>::Zero(_dim_eq_cstr, _dim_opt);
+    _dyn_ce0 = DVec<T>(_dim_eq_cstr);
+    const size_t inequalities = _dim_rf > 0 ? _dim_Uf : 1;
+    CI.resize(0., _dim_opt, inequalities);
+    ci0.resize(0., inequalities);
+    if (_dim_rf > 0) {
+      _dyn_CI = DMat<T>::Zero(_dim_Uf, _dim_opt);
+      _dyn_ci0 = DVec<T>(_dim_Uf);
+    }
+  }
   if (_dim_rf > 0) {
-    CI.resize(0., _dim_opt, _dim_Uf);
-    ci0.resize(0., _dim_Uf);
-    _dyn_CI = DMat<T>::Zero(_dim_Uf, _dim_opt);
-    _dyn_ci0 = DVec<T>(_dim_Uf);
-
     _Jc = DMat<T>(_dim_rf, WB::num_qdot_);
     _JcDotQdot = DVec<T>(_dim_rf);
     _Fr_des = DVec<T>(_dim_rf);
@@ -407,9 +456,6 @@ void WBIC<T>::_SetOptimizationSize() {
     _Uf = DMat<T>(_dim_Uf, _dim_rf);
     _Uf.setZero();
     _Uf_ieq_vec = DVec<T>(_dim_Uf);
-  } else {
-    CI.resize(0., _dim_opt, 1);
-    ci0.resize(0., 1);
   }
 }
 

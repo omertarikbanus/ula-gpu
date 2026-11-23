@@ -1,6 +1,28 @@
-build/
+# Local builds.
+/build/
 /build-*/
-__pycache__/
 *.o
+
+# Python and notebook caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+
+# Generated runs, downloaded checkpoints, bundles and standalone notebooks.
+# Keep benchmark source and small notebook templates visible to Git.
+/bench/artifacts/
+/bench/eval_inputs/
 MUJOCO_LOG.TXT
-bench/results*.json
+
+# Recorded replay trace: regenerable from pinned ULA via tools/reference/record.sh.
+/data/
+
+# Legacy/custom output paths; new commands default to bench/artifacts/.
+/bench/*.tar
+/bench/*.tar.gz
+/bench/*.pt
+/bench/*.log
+/bench/results*.json
+/bench/*_output.ipynb

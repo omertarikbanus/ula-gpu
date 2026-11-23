@@ -35,13 +35,29 @@ on the GPU.
   fixed-storage, bounded-iteration float version of the same dual active-set
   algorithm, compiled for CPU and GPU.
 - GPU access: Google Colab, with the code uploaded as the small package made
-  by `bench/make_colab_tarball.sh` (no repository push). The owner's own NVIDIA
-  machine is set aside for now. The development laptop has no NVIDIA GPU, so GPU
-  code is validated in CPU mode here and run on Colab.
+  by `bench/make_cuda_replay_tarball.sh` (no repository push). Bundle short
+  controller and Warp checks into one official Colab CLI session on an
+  inexpensive GPU where possible, and stop it afterward. The development
+  laptop can build CUDA code but cannot run it.
+- Repository hygiene: keep reusable benchmark source in `bench/` and tests
+  in `tests/`. Write generated bundles, notebooks, results and local policies
+  beneath the ignored `bench/artifacts/` directory. Retain one copy of final
+  checkpoints and compact evidence; discard temporary session logs, snapshots
+  and retired one-off launchers. Never hide all of `bench/` with `.gitignore`.
+- Keep Eigen for operations supported on CUDA. Evaluate NVIDIA's batched
+  partial-pivot LU and Jacobi SVD only for the decomposition calls Eigen
+  cannot run on-device. Keep the QP, singular-value cutoffs, and actual
+  contact/task sizes. Check both numerical behavior and whole-tick speed
+  before settling on a backend; see [CUDA replay](CUDA_REPLAY.md).
 - Training uses the Go2 with simple collision shapes (`models/go2/scene_gpu.xml`:
   box body, capsule legs, unchanged foot spheres, identical masses and
   inertias). MJX needs 24 GB for one step of the mesh scene and 0.5 GB for this
   one. Trained policies are checked on ula's detailed mesh scene.
+- Compare training against the three final ICRA Epsilon policies and their
+  matched normalization statistics. First test the frozen policies separately
+  from short PPO plumbing checks. For a training comparison, match the
+  interaction budget, evaluate in the ICRA setup, and report policy quality
+  separately from wall time; see [PPO smoke](PPO_SMOKE.md).
 
 ## Findings so far
 

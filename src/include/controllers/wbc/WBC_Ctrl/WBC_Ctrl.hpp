@@ -9,6 +9,7 @@
 #include <controllers/wbc/WBIC/WBIC.hpp>
 #include <controllers/wbc/WBIC/KinWBC.hpp>
 #include "parameters/MIT_UserParameters.h"
+#include "port/rigid_body.hh"
 
 
 #define WBCtrl WBC_Ctrl<T>
@@ -31,6 +32,8 @@ class WBC_Ctrl{
     const DVec<T>& getDesJpos() const { return _des_jpos; }
     const DVec<T>& getDesJvel() const { return _des_jvel; }
     const WBIC_ExtraData<T>* getWBICData() const { return _wbic_data; }
+    void setQpDispatch(ula::qp::WbicDispatch<T> dispatch) { _wbic->setQpDispatch(dispatch); }
+    void setDynamicsDispatch(ula::rigid::Dispatch<T> dispatch) { _dynamics_dispatch = dispatch; }
 
   protected:
     virtual void _ContactTaskUpdate(void * input,
@@ -51,6 +54,7 @@ class WBC_Ctrl{
     WBIC_ExtraData<T>* _wbic_data;
 
     FloatingBaseModel<T> _model;
+    ula::rigid::Dispatch<T> _dynamics_dispatch{};
     std::vector<ContactSpec<T> * > _contact_list;
     std::vector<Task<T> * > _task_list;
 

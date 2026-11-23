@@ -1,5 +1,6 @@
 #include "controllers/wbc/WBC_Ctrl/WBC_Ctrl.hpp"
 #include <utilities/Utilities_print.h>
+#include "port/rigid_body_adapter.hh"
 
 template<typename T>
 WBC_Ctrl<T>::WBC_Ctrl(FloatingBaseModel<T> model):
@@ -149,11 +150,33 @@ void WBC_Ctrl<T>::_UpdateModel(const quadruped::StateEstimate<T> & state_est,
   }
   _model.setState(_state);
 
-  _model.contactJacobians();
-  _model.massMatrix();
-  _model.generalizedGravityForce();
-  _model.generalizedCoriolisForce();
-
+  if (_dynamics_dispatch.run) {
+    // Populate the four feet and dynamics fields read by the remaining CPU
+    // tasks. Do not mark the full legacy model's caches as up to date.
+    using namespace ula::rigid;
+    Result<T> dynamics{};
+    _dynamics_dispatch.run(_dynamics_dispatch.context, pack_state(_state), dynamics);
+    for (int i = 0; i < kDof; ++i) {
+      _model._G[i] = dynamics.gravity.data[i];
+      _model._Cqd[i] = dynamics.coriolis.data[i];
+      for (int j = 0; j < kDof; ++j) _model._H(i, j) = dynamics.mass.data[i][j];
+    }
+    for (int leg = 0; leg < kFeet; ++leg) {
+      const size_t i = foot_index[leg];
+      const auto& ft = dynamics.feet[leg];
+      for (int a = 0; a < 3; ++a) {
+        _model._pGC[i][a] = ft.position.data[a];
+        _model._vGC[i][a] = ft.velocity.data[a];
+        _model._Jcdqd[i][a] = ft.bias.data[a];
+        for (int j = 0; j < kDof; ++j) _model._Jc[i](a, j) = ft.jacobian.data[a][j];
+      }
+    }
+  } else {
+    _model.contactJacobians();
+    _model.massMatrix();
+    _model.generalizedGravityForce();
+    _model.generalizedCoriolisForce();
+  }
   _A = _model.getMassMatrix();
   _grav = _model.getGravityForce();
   _coriolis = _model.getCoriolisForce();

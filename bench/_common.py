@@ -8,7 +8,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_SCENE = str(REPO / 'models/go2/scene_gpu.xml')
-DEFAULT_RESULTS = str(REPO / 'bench/results.json')
+DEFAULT_RESULTS = str(REPO / 'bench/artifacts/results.json')
 
 # Real-system timing: physics dt = 2 ms, controller ticks every physics step
 # (500 Hz), policy acts every 5 physics steps (100 Hz).

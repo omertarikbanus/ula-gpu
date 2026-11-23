@@ -1,0 +1,8 @@
+# Exact package set installed in the CPU spike venv (python 3.12), 2026-11-18.
+# jax[cuda12]==0.12.1 on GPU hosts pulls the matching nvidia-*-cu12 wheels.
+jax[cuda12]==0.12.1
+mujoco==3.11.0
+mujoco-mjx==3.11.0
+mujoco-warp==3.11.0
+warp-lang==1.19.0
+numpy==2.5.5

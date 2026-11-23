@@ -1,0 +1,1201 @@
+--- a/src/controller/BUILD.bazel
++++ b/src/controller/BUILD.bazel
+@@ -305,6 +305,17 @@
+     ],
+ )
+ 
++cc_binary(
++    name = "reference_recorder",
++    srcs = ["src/core/reference_recorder.cc"],
++    deps = [
++        ":headers",
++        ":rl_modules",
++        ":rl_runtime",
++        "@mujoco//:mujoco_lib",
++    ],
++)
++
+ cc_test(
+     name = "test_contact_friction",
+     srcs = ["src/tests/test_contact_friction.cc"],
+--- /dev/null
++++ b/src/controller/include/supervisor/ReplayTraceCapture.hh
+@@ -0,0 +1,119 @@
++#ifndef QUADRUPED_REPLAYTRACECAPTURE_HH
++#define QUADRUPED_REPLAYTRACECAPTURE_HH
++
++#include <array>
++#include <cstddef>
++
++namespace quadruped {
++
++struct ReplayTickCapture {
++  bool active = false;
++
++  // Pre-step simulator metadata (before module_manager_.stepOnce()).
++  double sim_time_pre_s = 0.0;
++  std::array<float, 4> mujoco_foot_contact_pre{};
++
++  // Stage 1: MdlRLCommandSource::update() (order 150).
++  bool cmd_captured = false;
++  bool cmd_use_fixed = false;
++  std::size_t action_count = 0;
++  std::array<float, 25> action{};
++  std::array<float, 3> base_command{};
++  std::array<float, 3> effective_desired_velocity{};
++  float height_residual = 0.0f;
++  std::array<float, 12> decoded_foot_forces{};
++  std::array<float, 12> decoded_footstep_residuals{};
++  float decoded_phase_delta = 0.0f;
++
++  // Stage 2: MdlCtGaitScheduler::update() (order 200).
++  bool gait_captured = false;
++  float gait_phase = 0.0f;
++  std::array<bool, 4> planned_contact{};
++  std::array<float, 4> contact_phase{};
++  std::array<float, 4> swing_phase{};
++  std::array<float, 4> stance_duration{};
++  std::array<float, 4> swing_duration{};
++  float gait_cycle_time = 0.0f;
++  float delta_theta = 0.0f;
++
++  // Stage 3: MdlFootstepPlanner::update() (order 210).
++  bool footstep_captured = false;
++  std::array<float, 12> footstep_planner_pFoot_des{};
++  std::array<float, 12> footstep_planner_leg_p_consumed{};
++
++  // Stage 4: MdlRLLocomotionState::update() (order 220).
++  bool rl_state_captured = false;
++  std::array<float, 3> body_pos_des{};
++  std::array<float, 3> body_vel_des{};
++  std::array<float, 3> body_rpy_des{};
++  std::array<float, 3> body_ang_vel_des{};
++  std::array<float, 12> fr_des{};
++  float floating_base_weight = 0.0f;
++
++  // Stage 5: MdlWBIC::update() (order 300).
++  bool wbic_input_captured = false;
++  std::array<float, 3> position_w{};
++  std::array<float, 4> orientation_wxyz{};
++  std::array<float, 3> linear_velocity_b{};
++  std::array<float, 3> angular_velocity_b{};
++  std::array<float, 4> measured_contact{};
++  std::array<float, 9> rotation_wb{};
++  std::array<float, 3> linear_velocity_w{};
++  float yaw{};
++  std::array<float, 12> wbic_joint_position{};
++  std::array<float, 12> wbic_joint_velocity{};
++  std::array<float, 12> foot_position_target{};
++  std::array<float, 12> foot_velocity_target{}, foot_acceleration_target{};
++
++  bool wbic_output_captured = false;
++  std::array<float, 12> joint_position_target{};
++  std::array<float, 12> joint_velocity_target{};
++  std::array<float, 12> feedforward_torque{};
++  std::array<float, 12> wbic_Fr{};
++  std::array<float, 18> wbic_qddot{};
++
++  // Stage 6: MdlLegController::applyCommands() (order 400).
++  bool leg_ctrl_captured = false;
++  std::array<float, 12> leg_controller_joint_position{};
++  std::array<float, 12> leg_controller_joint_velocity{};
++  bool actuator_captured = false;
++  std::array<double, 12> motor_torque{}, actuator_position{}, actuator_velocity{};
++  std::array<bool, 12> actuator_enabled{};
++  std::array<float, 12> leg_controller_tau_ff_sent{};
++  std::array<float, 3> torque_limits{};
++
++  // Stage 7: MdlSimDriver::_integrate() / update() (order 30000).
++  int sim_substep_count = 0;
++  std::array<double, 12> sim_substep0_tau_unclamped{};
++  std::array<double, 12> sim_substep0_actuator_force{};
++  std::array<double, 12> sim_substep1_tau_unclamped{};
++  std::array<double, 12> sim_substep1_actuator_force{};
++  double sim_time_post_s = 0.0;
++  std::array<float, 4> mujoco_foot_contact_post{};
++};
++
++class ReplayTraceContext {
++ public:
++  inline static thread_local ReplayTickCapture* priming = nullptr;
++  static ReplayTickCapture* current();
++  static void setCurrent(ReplayTickCapture* capture);
++
++  class ScopedGuard {
++   public:
++    explicit ScopedGuard(ReplayTickCapture* capture)
++        : prev_(ReplayTraceContext::current()) {
++      ReplayTraceContext::setCurrent(capture);
++    }
++    ~ScopedGuard() { ReplayTraceContext::setCurrent(prev_); }
++
++    ScopedGuard(const ScopedGuard&) = delete;
++    ScopedGuard& operator=(const ScopedGuard&) = delete;
++
++   private:
++    ReplayTickCapture* prev_{nullptr};
++  };
++};
++
++}  // namespace quadruped
++
++#endif  // QUADRUPED_REPLAYTRACECAPTURE_HH
+--- a/src/controller/include/supervisor/RLPipelineRuntime.hh
++++ b/src/controller/include/supervisor/RLPipelineRuntime.hh
+@@ -146,6 +146,7 @@
+   LegController<float>* legController() const;
+   std::array<float, 12> jointDefaultPosition() const;
+   quadruped::MdlWBIC* wbic() const { return wbic_; }
++  void dumpEffectiveParameters(std::ostream& out) const;
+ 
+  private:
+   struct HardwareThreadGuard {
+--- a/src/controller/src/modules/MdlCtGaitScheduler.cc
++++ b/src/controller/src/modules/MdlCtGaitScheduler.cc
+@@ -14,6 +14,7 @@
+ #include "modules/MdlControlParams.hh"
+ #include "modules/MdlStateEstimator.hh"
+ #include "rtcore/ModuleManager.hh"
++#include "supervisor/ReplayTraceCapture.hh"
+ 
+ namespace quadruped {
+ 
+@@ -94,6 +95,19 @@
+ 
+   _last_schedule = schedule;
+   _has_schedule = true;
++  if (auto* cap = ReplayTraceContext::current(); cap && cap->active) {
++    cap->gait_captured = true;
++    cap->gait_phase = schedule.gait_phase;
++    for (int leg = 0; leg < kNumLegs; ++leg) {
++      cap->planned_contact[leg] = (schedule.contact_state[leg] > 0.5f);
++      cap->contact_phase[leg] = schedule.contact_phase[leg];
++      cap->swing_phase[leg] = schedule.swing_phase[leg];
++      cap->stance_duration[leg] = schedule.stance_duration[leg];
++      cap->swing_duration[leg] = schedule.swing_duration[leg];
++    }
++    cap->gait_cycle_time = schedule.gait_cycle_time;
++    cap->delta_theta = schedule.delta_theta;
++  }
+ 
+   Vec4<float> contact_phase;
+   for (int leg = 0; leg < kNumLegs; ++leg) {
+--- a/src/controller/src/modules/MdlLegController.cc
++++ b/src/controller/src/modules/MdlLegController.cc
+@@ -14,6 +14,7 @@
+ #include "rtcore/ConfigTable.hh"
+ #include "rtcore/LogServer.hh"
+ #include "rtcore/ModuleManager.hh"
++#include "supervisor/ReplayTraceCapture.hh"
+ 
+ #include <algorithm>
+ 
+@@ -172,9 +173,24 @@
+ void MdlLegController::applyCommands() {
+   if (!_motorhw || !_legController) return;
+ 
++  auto* cap = ReplayTraceContext::current();
++  const bool record = (cap && cap->active);
++  if (record) {
++    cap->leg_ctrl_captured = true;
++    for (int j = 0; j < 3; ++j) {
++      cap->torque_limits[j] = _max_torque(j);
++    }
++  }
++
+   for (int leg = 0; leg < 4; ++leg) {
+     auto& cmd = _legController->commands[leg];
+     auto& data = _legController->datas[leg];
++    if (record) {
++      for (int j = 0; j < 3; ++j) {
++        cap->leg_controller_joint_position[leg * 3 + j] = data.q(j);
++        cap->leg_controller_joint_velocity[leg * 3 + j] = data.qd(j);
++      }
++    }
+ 
+     Vec3<float> legTorque = cmd.tauFeedForward;
+     Vec3<float> footForce = cmd.forceFeedForward;
+@@ -201,6 +217,14 @@
+       data.tauEstimate(joint) = total_tau;
+       const float tau_ff = total_tau - kp * q_err - kd * qd_err;
+       _last_tau_ff[axis] = tau_ff;
++      if (record) {
++        cap->leg_controller_tau_ff_sent[axis] = tau_ff;
++        if (!cap->wbic_output_captured) {
++          cap->joint_position_target[axis] = cmd.qDes[joint];
++          cap->joint_velocity_target[axis] = cmd.qdDes[joint];
++          cap->feedforward_torque[axis] = cmd.tauFeedForward[joint];
++        }
++      }
+       MotorHW::cmd_t motor_cmd;
+       motor_cmd.pos = static_cast<double>(cmd.qDes(joint));
+       motor_cmd.vel = static_cast<double>(cmd.qdDes(joint));
+--- a/src/controller/src/modules/MdlRLCommandSource.cc
++++ b/src/controller/src/modules/MdlRLCommandSource.cc
+@@ -18,6 +18,7 @@
+ #include "modules/MdlRLLocomotionState.hh"
+ #include "rtcore/ConfigTable.hh"
+ #include "rtcore/ModuleManager.hh"
++#include "supervisor/ReplayTraceCapture.hh"
+ 
+ namespace quadruped {
+ 
+@@ -426,6 +427,24 @@
+   }
+ 
+   _effective_desired = desired;
++  if (auto* cap = ReplayTraceContext::current(); cap && cap->active) {
++    cap->cmd_captured = true;
++    cap->cmd_use_fixed = use_fixed;
++    cap->action_count = _policy_action_count;
++    cap->action = _policy_action;
++    for (int i = 0; i < 3; ++i) {
++      cap->base_command[i] = _policy_base_desired.body_velocity[i];
++      cap->effective_desired_velocity[i] = desired.body_velocity[i];
++    }
++    cap->height_residual = desired.height_residual;
++    for (int leg = 0; leg < 4; ++leg) {
++      for (int i = 0; i < 3; ++i) {
++        cap->decoded_foot_forces[leg * 3 + i] = forces.forces[leg][i];
++        cap->decoded_footstep_residuals[leg * 3 + i] = residuals.offsets[leg][i];
++      }
++    }
++    cap->decoded_phase_delta = phase_delta;
++  }
+   if (_gait_scheduler) _gait_scheduler->setPhaseDelta(phase_delta);
+   if (_footstep_planner) {
+     _footstep_planner->setDesiredVelocity(desired);
+--- a/src/controller/src/modules/MdlWBIC.cc
++++ b/src/controller/src/modules/MdlWBIC.cc
+@@ -15,6 +15,7 @@
+ #include "modules/MdlLegController.hh"
+ #include "modules/MdlStateEstimator.hh"
+ #include "rtcore/ModuleManager.hh"
++#include "supervisor/ReplayTraceCapture.hh"
+ 
+ namespace quadruped {
+ 
+@@ -95,7 +96,39 @@
+     _last_leg_controller = _leg_controller_module->legController();
+   }
+ 
++  auto capture_inputs = [this](const LocomotionCtrlData<float>& command,
++                               const StateEstimate<float>& state) {
++    if (auto* cap = ReplayTraceContext::current(); cap && cap->active) {
++      cap->wbic_input_captured = true;
++      for (int i = 0; i < 3; ++i) {
++        cap->position_w[i] = state.position[i];
++        cap->linear_velocity_b[i] = state.vBody[i];
++        cap->angular_velocity_b[i] = state.omegaBody[i];
++        cap->linear_velocity_w[i] = state.vWorld[i];
++        for (int j = 0; j < 3; ++j) cap->rotation_wb[3 * i + j] = state.rBody(j, i);
++      }
++      cap->yaw = state.rpy[2];
++      for (int i = 0; i < 4; ++i) {
++        cap->orientation_wxyz[i] = state.orientation[i];
++        cap->measured_contact[i] = state.contactEstimate[i];
++      }
++      for (int leg = 0; leg < 4; ++leg) {
++        for (int j = 0; j < 3; ++j) {
++          const int idx = leg * 3 + j;
++          cap->wbic_joint_position[idx] = _last_leg_controller->datas[leg].q[j];
++          cap->wbic_joint_velocity[idx] = _last_leg_controller->datas[leg].qd[j];
++          cap->foot_position_target[idx] = command.pFoot_des[leg][j];
++          cap->foot_velocity_target[idx] = command.vFoot_des[leg][j];
++          cap->foot_acceleration_target[idx] = command.aFoot_des[leg][j];
++        }
++      }
++    }
++  };
++
+   if (!_wbcCtrl || !_last_leg_controller) {
++    if (_has_command && _state_estimator && _last_leg_controller) {
++      capture_inputs(_wbcData, _state_estimator->getCheetahStateEstimate());
++    }
+     _updateLogs();
+     _has_command = false;
+     _has_valid_output = false;
+@@ -146,9 +179,41 @@
+       kd_backup[leg_idx] = _last_leg_controller->commands[leg_idx].kdCartesian;
+     }
+ 
++    capture_inputs(command, state);
++
+     _wbcCtrl->run(&command, state, _last_leg_controller, &user_params);
+     _restoreCartesianCommands(vdes_backup, kd_backup);
+     _updateResult();
++
++    if (auto* cap = ReplayTraceContext::current(); cap && cap->active) {
++      cap->wbic_output_captured = true;
++      for (int i = 0; i < 12; ++i) {
++        cap->joint_position_target[i] = _result.q_des[i];
++        cap->joint_velocity_target[i] = _result.qd_des[i];
++        cap->feedforward_torque[i] = _result.tau_ff[i];
++      }
++      std::fill(cap->wbic_Fr.begin(), cap->wbic_Fr.end(), 0.0f);
++      std::fill(cap->wbic_qddot.begin(), cap->wbic_qddot.end(), 0.0f);
++      const auto* wbic_data = _wbcCtrl ? _wbcCtrl->getWBICData() : nullptr;
++      if (wbic_data) {
++        if (wbic_data->_Fr.size() > 0) {
++          int src_idx = 0;
++          for (int leg = 0; leg < 4; ++leg) {
++            if (command.contact_state[leg] > 0.0f) {
++              if (src_idx + 2 < static_cast<int>(wbic_data->_Fr.size())) {
++                cap->wbic_Fr[3 * leg + 0] = static_cast<float>(wbic_data->_Fr[src_idx + 0]);
++                cap->wbic_Fr[3 * leg + 1] = static_cast<float>(wbic_data->_Fr[src_idx + 1]);
++                cap->wbic_Fr[3 * leg + 2] = static_cast<float>(wbic_data->_Fr[src_idx + 2]);
++              }
++              src_idx += 3;
++            }
++          }
++        }
++        for (int i = 0; i < 18 && i < static_cast<int>(wbic_data->_qddot.size()); ++i) {
++          cap->wbic_qddot[i] = static_cast<float>(wbic_data->_qddot[i]);
++        }
++      }
++    }
+ 
+     _has_valid_output = true;
+   } else {
+--- a/src/controller/src/modules/MdlRLLocomotionState.cc
++++ b/src/controller/src/modules/MdlRLLocomotionState.cc
+@@ -17,6 +17,7 @@
+ #include "modules/MdlWBIC.hh"
+ #include "rtcore/ConfigTable.hh"
+ #include "rtcore/ModuleManager.hh"
++#include "supervisor/ReplayTraceCapture.hh"
+ 
+ namespace quadruped {
+ 
+@@ -195,6 +196,22 @@
+   _log_body_rpy_cmd[1] = cmd.pBody_RPY_des[1];
+   _log_body_rpy_cmd[2] = cmd.pBody_RPY_des[2];
+ 
++  if (auto* cap = ReplayTraceContext::current(); cap && cap->active) {
++    cap->rl_state_captured = true;
++    for (int i = 0; i < 3; ++i) {
++      cap->body_pos_des[i] = cmd.pBody_des[i];
++      cap->body_vel_des[i] = cmd.vBody_des[i];
++      cap->body_rpy_des[i] = cmd.pBody_RPY_des[i];
++      cap->body_ang_vel_des[i] = cmd.vBody_Ori_des[i];
++    }
++    for (int leg = 0; leg < 4; ++leg) {
++      for (int i = 0; i < 3; ++i) {
++        cap->fr_des[leg * 3 + i] = cmd.Fr_des[leg][i];
++      }
++    }
++    cap->floating_base_weight = _floating_base_weight;
++  }
++
+   _wbic->setCommand(cmd);
+ }
+ 
+--- a/src/controller/src/modules/MdlFootstepPlanner.cc
++++ b/src/controller/src/modules/MdlFootstepPlanner.cc
+@@ -18,6 +18,7 @@
+ #include "modules/MdlLegController.hh"
+ #include "modules/MdlStateEstimator.hh"
+ #include "rtcore/ModuleManager.hh"
++#include "supervisor/ReplayTraceCapture.hh"
+ 
+ namespace quadruped {
+ 
+@@ -183,6 +184,17 @@
+   prev_contact_state_ = gait.contact_state;
+   _targets = targets;
+   _has_targets = true;
++  if (auto* cap = ReplayTraceContext::current(); cap && cap->active) {
++    cap->footstep_captured = true;
++    for (int leg = 0; leg < kNumLegs; ++leg) {
++      for (int axis = 0; axis < 3; ++axis) {
++        cap->footstep_planner_pFoot_des[leg * 3 + axis] =
++            targets.pFoot_des[leg][axis];
++        cap->footstep_planner_leg_p_consumed[leg * 3 + axis] =
++            static_cast<float>(leg_controller->datas[leg].p[axis]);
++      }
++    }
++  }
+ }
+ 
+ void MdlFootstepPlanner::setDesiredVelocity(const RlDesiredVelocity& desired) {
+--- /dev/null
++++ b/src/controller/src/utilities/ReplayTraceCapture.cpp
+@@ -0,0 +1,16 @@
++#include "supervisor/ReplayTraceCapture.hh"
++
++namespace quadruped {
++namespace {
++thread_local ReplayTickCapture* g_replay_trace_capture = nullptr;
++}  // namespace
++
++ReplayTickCapture* ReplayTraceContext::current() {
++  return g_replay_trace_capture;
++}
++
++void ReplayTraceContext::setCurrent(ReplayTickCapture* capture) {
++  g_replay_trace_capture = capture;
++}
++
++}  // namespace quadruped
+--- a/src/controller/src/core/RLPipelineRuntime.cc
++++ b/src/controller/src/core/RLPipelineRuntime.cc
+@@ -28,6 +28,7 @@
+ #include "rtcore/ModuleManager.hh"
+ #include "rtclient/LogClient.hh"
+ #include "rtclient/WriteCSV.hh"
++#include "supervisor/ReplayTraceCapture.hh"
+ 
+ namespace quadruped {
+ namespace {
+@@ -174,11 +175,13 @@
+   }
+ 
+   HardwareThreadGuard hw_guard(motor_hw_, imu_hw_, clock_hw_);
+-  constexpr int kResetPrimeFrames = 5;
++  constexpr int kResetPrimeFrames = 6;
+   for (int i = 0; i < kResetPrimeFrames; ++i) {
++    ReplayTraceContext::ScopedGuard capture(ReplayTraceContext::priming
++                                               ? &ReplayTraceContext::priming[i]
++                                               : nullptr);
+     module_manager_.stepOnce();
+   }
+-  module_manager_.stepOnce();
+   cacheModuleState();
+   maybeInitLocalLogging();
+   drainLocalLogging();
+@@ -359,6 +362,12 @@
+                       : std::array<float, 12>{};
+ }
+ 
++void RLPipelineRuntime::dumpEffectiveParameters(std::ostream& out) const {
++  if (control_params_) {
++    control_params_->dumpEffectiveParameters(out);
++  }
++}
++
+ void RLPipelineRuntime::initializeQuadcontrol() {
+   if (disabled_) {
+     return;
+--- /dev/null
++++ b/src/controller/src/core/reference_recorder.cc
+@@ -0,0 +1,626 @@
++#include <algorithm>
++#include <array>
++#include <cmath>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <fstream>
++#include <iomanip>
++#include <iostream>
++#include <sstream>
++#include <string>
++#include <vector>
++
++#include "control/ControlMessages.hh"
++#include "supervisor/RLPipelineRuntime.hh"
++#include "supervisor/ReplayTraceCapture.hh"
++
++namespace {
++
++constexpr const char* kReferenceCommit =
++    "29c3dfccde133ffe3bbf56608bd4b0a96777de2e";
++constexpr const char* kDefaultConfigPath =
++    "/app/src/controller/config/robots/sim/envpool.toml";
++constexpr const char* kDefaultScenePath =
++    "/app/src/controller/models/go2/scene.xml";
++constexpr const char* kDefaultUrdfPath =
++    "/app/src/controller/models/go2/go2.urdf";
++constexpr const char* kControlParamsPath =
++    "/app/src/controller/config/default/control_params.toml";
++constexpr const char* kSimulationTomlPath =
++    "/app/src/controller/config/robots/sim/simulation.toml";
++constexpr const char* kDefaultOutputPath =
++    "/tmp/opencode/ula-reference-trace.jsonl";
++
++constexpr const char* kSimConfigOverlay = R"TOML(# Deterministic replay-recording overlay over envpool.toml
++[simulation]
++external_force_enable = false
++
++[rl_command_source]
++policy_random_velocity_enabled = false
++policy_base_velocity = [0.0, 0.0, 0.0]
++policy_random_seed = 1000
++
++[logserver]
++enabled = false
++)TOML";
++
++class Sha256 {
++ public:
++  Sha256() { reset(); }
++
++  void update(const uint8_t* data, size_t len) {
++    for (size_t i = 0; i < len; ++i) {
++      data_[datalen_++] = data[i];
++      if (datalen_ == 64) {
++        transform();
++        bitlen_ += 512;
++        datalen_ = 0;
++      }
++    }
++  }
++
++  void update(const std::string& s) {
++    update(reinterpret_cast<const uint8_t*>(s.data()), s.size());
++  }
++
++  std::string hexDigest() {
++    uint32_t i = datalen_;
++    if (datalen_ < 56) {
++      data_[i++] = 0x80;
++      while (i < 56) data_[i++] = 0x00;
++    } else {
++      data_[i++] = 0x80;
++      while (i < 64) data_[i++] = 0x00;
++      transform();
++      std::memset(data_, 0, 56);
++    }
++    bitlen_ += static_cast<uint64_t>(datalen_) * 8ULL;
++    for (int k = 0; k < 8; ++k) {
++      data_[63 - k] = static_cast<uint8_t>((bitlen_ >> (8 * k)) & 0xffU);
++    }
++    transform();
++
++    std::ostringstream oss;
++    oss << std::hex << std::setfill('0');
++    for (int k = 0; k < 8; ++k) {
++      oss << std::setw(8) << state_[k];
++    }
++    return oss.str();
++  }
++
++ private:
++  static inline uint32_t rotr(uint32_t x, uint32_t n) {
++    return (x >> n) | (x << (32 - n));
++  }
++
++  void reset() {
++    datalen_ = 0;
++    bitlen_ = 0;
++    state_[0] = 0x6a09e667U;
++    state_[1] = 0xbb67ae85U;
++    state_[2] = 0x3c6ef372U;
++    state_[3] = 0xa54ff53aU;
++    state_[4] = 0x510e527fU;
++    state_[5] = 0x9b05688cU;
++    state_[6] = 0x1f83d9abU;
++    state_[7] = 0x5be0cd19U;
++  }
++
++  void transform() {
++    static constexpr uint32_t k[64] = {
++        0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU,
++        0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U, 0xd807aa98U, 0x12835b01U,
++        0x243185beU, 0x550c7dc3U, 0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U,
++        0xc19bf174U, 0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU,
++        0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU, 0x983e5152U,
++        0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U,
++        0x06ca6351U, 0x14292967U, 0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU,
++        0x53380d13U, 0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
++        0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U, 0xd192e819U,
++        0xd6990624U, 0xf40e3585U, 0x106aa070U, 0x19a4c116U, 0x1e376c08U,
++        0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU,
++        0x682e6ff3U, 0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
++        0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U};
++
++    uint32_t m[64];
++    for (uint32_t i = 0, j = 0; i < 16; ++i, j += 4) {
++      m[i] = (static_cast<uint32_t>(data_[j]) << 24) |
++             (static_cast<uint32_t>(data_[j + 1]) << 16) |
++             (static_cast<uint32_t>(data_[j + 2]) << 8) |
++             static_cast<uint32_t>(data_[j + 3]);
++    }
++    for (uint32_t i = 16; i < 64; ++i) {
++      uint32_t s0 = rotr(m[i - 15], 7) ^ rotr(m[i - 15], 18) ^ (m[i - 15] >> 3);
++      uint32_t s1 = rotr(m[i - 2], 17) ^ rotr(m[i - 2], 19) ^ (m[i - 2] >> 10);
++      m[i] = m[i - 16] + s0 + m[i - 7] + s1;
++    }
++
++    uint32_t a = state_[0];
++    uint32_t b = state_[1];
++    uint32_t c = state_[2];
++    uint32_t d = state_[3];
++    uint32_t e = state_[4];
++    uint32_t f = state_[5];
++    uint32_t g = state_[6];
++    uint32_t h = state_[7];
++
++    for (uint32_t i = 0; i < 64; ++i) {
++      uint32_t S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
++      uint32_t ch = (e & f) ^ ((~e) & g);
++      uint32_t temp1 = h + S1 + ch + k[i] + m[i];
++      uint32_t S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
++      uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
++      uint32_t temp2 = S0 + maj;
++
++      h = g;
++      g = f;
++      f = e;
++      e = d + temp1;
++      d = c;
++      c = b;
++      b = a;
++      a = temp1 + temp2;
++    }
++
++    state_[0] += a;
++    state_[1] += b;
++    state_[2] += c;
++    state_[3] += d;
++    state_[4] += e;
++    state_[5] += f;
++    state_[6] += g;
++    state_[7] += h;
++  }
++
++  uint8_t data_[64]{};
++  uint32_t datalen_{0};
++  uint64_t bitlen_{0};
++  uint32_t state_[8]{};
++};
++
++bool readFile(const std::string& path, std::string& out) {
++  std::ifstream ifs(path, std::ios::binary);
++  if (!ifs) return false;
++  std::ostringstream ss;
++  ss << ifs.rdbuf();
++  out = ss.str();
++  return true;
++}
++
++std::string sha256File(const std::string& path) {
++  std::string content;
++  if (!readFile(path, content)) return "";
++  Sha256 h;
++  h.update(content);
++  return h.hexDigest();
++}
++
++std::string sha256String(const std::string& s) {
++  Sha256 h;
++  h.update(s);
++  return h.hexDigest();
++}
++
++std::string jsonEscape(const std::string& s) {
++  std::ostringstream oss;
++  for (unsigned char c : s) {
++    switch (c) {
++      case '"':
++        oss << "\\\"";
++        break;
++      case '\\':
++        oss << "\\\\";
++        break;
++      case '\b':
++        oss << "\\b";
++        break;
++      case '\f':
++        oss << "\\f";
++        break;
++      case '\n':
++        oss << "\\n";
++        break;
++      case '\r':
++        oss << "\\r";
++        break;
++      case '\t':
++        oss << "\\t";
++        break;
++      default:
++        if (c < 0x20) {
++          oss << "\\u" << std::hex << std::setw(4) << std::setfill('0')
++              << static_cast<int>(c) << std::dec;
++        } else {
++          oss << static_cast<char>(c);
++        }
++    }
++  }
++  return oss.str();
++}
++
++template <std::size_t N>
++bool allFinite(const std::array<float, N>& arr) {
++  return std::all_of(arr.begin(), arr.end(),
++                     [](float v) { return std::isfinite(v); });
++}
++
++template <std::size_t N>
++bool allFinite(const std::array<double, N>& arr) {
++  return std::all_of(arr.begin(), arr.end(),
++                     [](double v) { return std::isfinite(v); });
++}
++
++template <typename T, std::size_t N>
++void writeJsonArray(std::ostream& os, const std::array<T, N>& arr,
++                     int /*precision*/) {
++  os << "[";
++  os << std::defaultfloat << std::setprecision(17);
++  for (std::size_t i = 0; i < N; ++i) {
++    if (i > 0) os << ",";
++    os << arr[i];
++  }
++  os << "]";
++}
++
++template <std::size_t N>
++void writeBoolArray(std::ostream& os, const std::array<bool, N>& arr) {
++  os << "[";
++  for (std::size_t i = 0; i < N; ++i) {
++    if (i > 0) os << ",";
++    os << (arr[i] ? "true" : "false");
++  }
++  os << "]";
++}
++
++struct ScriptedStep {
++  std::array<float, 3> base_command{};
++  std::array<double, 25> action{};
++};
++
++ScriptedStep makeStep(int episode, int tick) {
++  ScriptedStep s{};
++  s.action.fill(0.0);
++  if (episode == 0) {
++    if (tick < 100) {
++      // Zero phase: zero base_command, zero 25D normalized action.
++    } else if (tick < 200) {
++      // Forward walking: base_command vx=0.4 + residual action[0]=0.4 (+0.2 -> 0.6 m/s)
++      // Vertical force bias action[5,8,11,14]=-0.4 -> Fz=75 N/leg (~150 N over 2 stance legs)
++      s.base_command = {0.4f, 0.0f, 0.0f};
++      s.action[0] = 0.4;
++      for (int leg = 0; leg < 4; ++leg) {
++        s.action[3 + leg * 3 + 2] = -0.4;
++      }
++    } else {
++      // Walking + lateral + turn + small footstep residuals + slower phase delta
++      s.base_command = {0.4f, 0.1f, 0.3f};
++      s.action[0] = 0.2;
++      s.action[1] = 0.1;
++      s.action[2] = 0.5;
++      for (int leg = 0; leg < 4; ++leg) {
++        s.action[3 + leg * 3 + 2] = -0.4;
++        s.action[15 + leg * 2 + 0] = (leg % 2 == 0) ? 0.02 : -0.02;
++        s.action[15 + leg * 2 + 1] = (leg < 2) ? 0.01 : -0.01;
++      }
++      s.action[24] = -0.2;
++    }
++  } else {
++    if (tick < 50) {
++      // Post-reset zero phase.
++    } else {
++      // Pure yaw turn phase.
++      s.base_command = {0.0f, 0.0f, -0.3f};
++      s.action[2] = -0.5;
++      for (int leg = 0; leg < 4; ++leg) {
++        s.action[3 + leg * 3 + 2] = -0.4;
++      }
++    }
++  }
++  return s;
++}
++
++}  // namespace
++
++int main(int argc, char** argv) {
++  std::string output_path = kDefaultOutputPath;
++  std::string config_path = kDefaultConfigPath;
++  int ep0_ticks = 300;
++  int ep1_ticks = 100;
++
++  for (int i = 1; i < argc; ++i) {
++    std::string arg = argv[i];
++    if (arg == "--output" && i + 1 < argc) {
++      output_path = argv[++i];
++    } else if (arg == "--config" && i + 1 < argc) {
++      config_path = argv[++i];
++    } else if (arg == "--ep0-ticks" && i + 1 < argc) {
++      ep0_ticks = std::atoi(argv[++i]);
++    } else if (arg == "--ep1-ticks" && i + 1 < argc) {
++      ep1_ticks = std::atoi(argv[++i]);
++    } else {
++      std::cerr << "Unknown or incomplete argument: " << arg << "\n";
++      return 2;
++    }
++  }
++
++  const std::string scene_sha = sha256File(kDefaultScenePath);
++  const std::string urdf_sha = sha256File(kDefaultUrdfPath);
++  if (scene_sha.empty() || urdf_sha.empty()) {
++    std::cerr << "Failed to hash scene or URDF asset.\n";
++    return 1;
++  }
++
++  quadruped::RLPipelineRuntime::Options opts;
++  opts.env_id = 0;
++  opts.pipeline = quadruped::RLPipelineRuntime::Pipeline::kWbic;
++  opts.sim_config_path = config_path;
++  opts.sim_config_overlay = kSimConfigOverlay;
++  opts.enable_local_log_for_env0 = false;
++
++  quadruped::RLPipelineRuntime runtime(opts);
++  if (!runtime.initialize()) {
++    std::cerr << "RLPipelineRuntime::initialize() failed.\n";
++    return 1;
++  }
++
++  std::ostringstream effective_params_ss;
++  runtime.dumpEffectiveParameters(effective_params_ss);
++
++  std::string envpool_toml, ctrl_toml, sim_toml;
++  readFile(config_path, envpool_toml);
++  readFile(kControlParamsPath, ctrl_toml);
++  readFile(kSimulationTomlPath, sim_toml);
++
++  std::ostringstream effective_cfg_ss;
++  effective_cfg_ss << "# effective_config_snapshot\n"
++                   << "# config_path=" << config_path << "\n"
++                   << "# --- control_params.toml ---\n"
++                   << ctrl_toml << "\n"
++                   << "# --- simulation.toml ---\n"
++                   << sim_toml << "\n"
++                   << "# --- envpool.toml ---\n"
++                   << envpool_toml << "\n"
++                   << "# --- sim_config_overlay ---\n"
++                   << kSimConfigOverlay << "\n"
++                   << "# --- runtime_effective_parameters ---\n"
++                   << effective_params_ss.str();
++  const std::string config_sha = sha256String(effective_cfg_ss.str());
++
++  std::ofstream out(output_path, std::ios::trunc);
++  if (!out) {
++    std::cerr << "Failed to open output trace: " << output_path << "\n";
++    return 1;
++  }
++
++  // Emit manifest.
++  out << std::fixed;
++  out << "{"
++      << "\"type\":\"manifest\""
++      << ",\"schema\":\"ula-controller-replay\""
++      << ",\"version\":1"
++      << ",\"reference_commit\":\"" << kReferenceCommit << "\""
++      << ",\"replay_profile\":\"" << (config_path == kDefaultConfigPath ? "go2_envpool_script_v1" : "custom") << "\""
++      << ",\"dt_s\":" << std::setprecision(6) << runtime.stepPeriodSeconds()
++      << ",\"scene_path\":\"" << jsonEscape(kDefaultScenePath) << "\""
++      << ",\"scene_sha256\":\"" << scene_sha << "\""
++      << ",\"urdf_path\":\"" << jsonEscape(kDefaultUrdfPath) << "\""
++      << ",\"urdf_sha256\":\"" << urdf_sha << "\""
++      << ",\"config_path\":\"" << jsonEscape(config_path) << "\""
++      << ",\"config_sha256\":\"" << config_sha << "\""
++      << ",\"config_overlay\":\"" << jsonEscape(kSimConfigOverlay) << "\""
++      << ",\"effective_parameters\":\"" << jsonEscape(effective_params_ss.str())
++      << "\""
++      << ",\"seeds\":{\"truth_noise_seed\":314,\"sensor_noise_seed\":1001,"
++      << "\"policy_random_seed\":1000,\"external_force_enable\":false}"
++      << ",\"partial\":false"
++      << ",\"stage_offsets\":{"
++      << "\"module_orders\":{\"MdlControlParams\":100,\"MdlRLCommandSource\":150,"
++      << "\"MdlCtGaitScheduler\":200,\"MdlFootstepPlanner\":210,"
++      << "\"MdlRLLocomotionState\":220,\"MdlWBIC\":300,"
++      << "\"MdlLegController\":400,\"MdlSimDriver\":30000,"
++      << "\"MdlStateEstimator\":32000},"
++      << "\"joint_state_offset_ticks\":1,"
++      << "\"notes\":\"MdlWBIC (order 300) and MdlFootstepPlanner (order 210) "
++         "consume leg_controller->datas from tick t-1 order 400 (plant sample "
++         "t-2) and StateEstimate from tick t-1 order 32000 (plant sample t-1); "
++         "MdlLegController (order 400) refreshes datas from pre-step SimMotorHW "
++         "(plant sample t-1) before computing motor_torque. Both joint samples "
++         "are recorded explicitly. measured_contact records state.contactEstimate "
++         "consumed by WBIC (overridden by t-1 planned contact); "
++         "mujoco_foot_contact_pre records raw MuJoCo foot contact pre-step.\""
++      << "}"
++      << "}\n";
++
++  const std::array<int, 2> ep_ticks = {ep0_ticks, ep1_ticks};
++  int total_ticks = 0;
++  for (int ep = 0; ep < 2; ++ep) {
++    std::array<quadruped::ReplayTickCapture, 6> prime{};
++    for (auto& cap : prime) cap.active = true;
++    quadruped::ReplayTraceContext::priming = prime.data();
++    runtime.resetEpisode();
++    quadruped::ReplayTraceContext::priming = nullptr;
++
++    out << "{"
++        << "\"type\":\"reset\""
++        << ",\"episode\":" << ep
++        << ",\"priming_ticks\":6"
++        << ",\"priming_action_count\":0"
++        << "}\n";
++
++    for (int tick = 0; tick < ep_ticks[ep] + 6; ++tick) {
++      quadruped::ReplayTickCapture cap;
++      if (tick < 6) {
++        cap = prime[tick];
++      } else {
++        const ScriptedStep step = makeStep(ep, tick - 6);
++        quadruped::RlDesiredVelocity base_vel{};
++        base_vel.body_velocity[0] = step.base_command[0];
++        base_vel.body_velocity[1] = step.base_command[1];
++        base_vel.body_velocity[2] = step.base_command[2];
++        runtime.setPolicyBaseVelocity(base_vel);
++        runtime.setPolicyAction(step.action.data(), step.action.size());
++        cap.active = true;
++        quadruped::ReplayTraceContext::ScopedGuard guard(&cap);
++        runtime.stepFrame();
++      }
++
++      if (!cap.cmd_captured || !cap.gait_captured || !cap.wbic_input_captured ||
++          !cap.footstep_captured || !cap.rl_state_captured ||
++          cap.wbic_output_captured != (tick != 0) || !cap.leg_ctrl_captured || !cap.actuator_captured) {
++        std::cerr << "Missing stage capture at episode=" << ep
++                  << " tick=" << tick << " (cmd=" << cap.cmd_captured
++                  << " gait=" << cap.gait_captured
++                  << " wbic_in=" << cap.wbic_input_captured
++                  << " wbic_out=" << cap.wbic_output_captured
++                  << " leg_ctrl=" << cap.leg_ctrl_captured << ")\n";
++        return 1;
++      }
++
++      const bool finite_ok =
++          allFinite(cap.action) && allFinite(cap.base_command) &&
++          allFinite(cap.position_w) && allFinite(cap.orientation_wxyz) &&
++          allFinite(cap.linear_velocity_b) && allFinite(cap.angular_velocity_b) &&
++          allFinite(cap.wbic_joint_position) &&
++          allFinite(cap.wbic_joint_velocity) &&
++          allFinite(cap.measured_contact) &&
++          allFinite(cap.leg_controller_joint_position) &&
++          allFinite(cap.leg_controller_joint_velocity) &&
++          std::isfinite(cap.gait_phase) &&
++          allFinite(cap.foot_position_target) &&
++          allFinite(cap.joint_position_target) &&
++          allFinite(cap.joint_velocity_target) &&
++          allFinite(cap.feedforward_torque) &&
++          allFinite(cap.motor_torque) &&
++          allFinite(cap.sim_substep0_actuator_force) &&
++          allFinite(cap.sim_substep1_actuator_force);
++      if (!finite_ok) {
++        std::cerr << "Non-finite value detected at episode=" << ep
++                  << " tick=" << tick << "\n";
++        return 1;
++      }
++
++      out << "{"
++          << "\"type\":\"tick\""
++          << ",\"episode\":" << ep
++          << ",\"tick\":" << tick
++          << ",\"sim_time_pre_s\":" << std::setprecision(9) << cap.sim_time_pre_s
++          << ",\"sim_time_post_s\":" << std::setprecision(9) << cap.sim_time_post_s
++          << ",\"sim_substep_count\":" << cap.sim_substep_count
++          << ",\"input\":{"
++          << "\"action_count\":" << cap.action_count
++          << ",\"action\":";
++      writeJsonArray(out, cap.action, 9);
++      out << ",\"base_command\":";
++      writeJsonArray(out, cap.base_command, 9);
++      out << ",\"position_w\":";
++      writeJsonArray(out, cap.position_w, 9);
++       out << ",\"orientation_wxyz\":";
++       writeJsonArray(out, cap.orientation_wxyz, 9);
++       out << ",\"rotation_wb\":";
++       writeJsonArray(out, cap.rotation_wb, 17);
++       out << ",\"yaw\":" << cap.yaw << ",\"linear_velocity_w\":";
++       writeJsonArray(out, cap.linear_velocity_w, 17);
++       out << ",\"foot_position_leg\":";
++       writeJsonArray(out, cap.footstep_planner_leg_p_consumed, 17);
++      out << ",\"linear_velocity_b\":";
++      writeJsonArray(out, cap.linear_velocity_b, 9);
++      out << ",\"angular_velocity_b\":";
++      writeJsonArray(out, cap.angular_velocity_b, 9);
++      out << ",\"joint_position\":";
++      writeJsonArray(out, cap.wbic_joint_position, 9);
++      out << ",\"joint_velocity\":";
++      writeJsonArray(out, cap.wbic_joint_velocity, 9);
++      out << ",\"measured_contact\":";
++      writeJsonArray(out, cap.measured_contact, 9);
++      out << ",\"leg_controller_joint_position\":";
++      writeJsonArray(out, cap.leg_controller_joint_position, 9);
++       out << ",\"leg_controller_joint_velocity\":";
++       writeJsonArray(out, cap.leg_controller_joint_velocity, 9);
++       out << ",\"actuator_position\":";
++       writeJsonArray(out, cap.actuator_position, 17);
++       out << ",\"actuator_velocity\":";
++       writeJsonArray(out, cap.actuator_velocity, 17);
++       out << ",\"actuator_enabled\":";
++       writeBoolArray(out, cap.actuator_enabled);
++      out << ",\"mujoco_foot_contact_pre\":";
++      writeJsonArray(out, cap.mujoco_foot_contact_pre, 9);
++      out << "}";
++
++      out << ",\"output\":{"
++           << "\"gait_phase\":" << std::setprecision(17) << cap.gait_phase
++           << ",\"wbic_ran\":" << (cap.wbic_output_captured ? "true" : "false")
++          << ",\"planned_contact\":";
++      writeBoolArray(out, cap.planned_contact);
++       out << ",\"foot_position_target\":";
++       writeJsonArray(out, cap.foot_position_target, 9);
++       out << ",\"foot_velocity_target\":";
++       writeJsonArray(out, cap.foot_velocity_target, 17);
++       out << ",\"foot_acceleration_target\":";
++       writeJsonArray(out, cap.foot_acceleration_target, 17);
++      out << ",\"joint_position_target\":";
++      writeJsonArray(out, cap.joint_position_target, 9);
++      out << ",\"joint_velocity_target\":";
++      writeJsonArray(out, cap.joint_velocity_target, 9);
++      out << ",\"feedforward_torque\":";
++      writeJsonArray(out, cap.feedforward_torque, 9);
++      out << ",\"motor_torque\":";
++      writeJsonArray(out, cap.motor_torque, 9);
++      out << ",\"torque_limits\":";
++      writeJsonArray(out, cap.torque_limits, 9);
++      out << ",\"leg_controller_tau_ff_sent\":";
++      writeJsonArray(out, cap.leg_controller_tau_ff_sent, 9);
++      out << ",\"sim_substep0_tau_unclamped\":";
++      writeJsonArray(out, cap.sim_substep0_tau_unclamped, 9);
++      out << ",\"sim_substep0_actuator_force\":";
++      writeJsonArray(out, cap.sim_substep0_actuator_force, 9);
++      out << ",\"sim_substep1_actuator_force\":";
++      writeJsonArray(out, cap.sim_substep1_actuator_force, 9);
++      out << ",\"wbic_Fr\":";
++      writeJsonArray(out, cap.wbic_Fr, 9);
++      out << ",\"wbic_qddot\":";
++      writeJsonArray(out, cap.wbic_qddot, 9);
++      out << ",\"effective_desired_velocity\":";
++      writeJsonArray(out, cap.effective_desired_velocity, 9);
++      out << ",\"height_residual\":" << std::setprecision(9) << cap.height_residual
++          << ",\"decoded_phase_delta\":" << std::setprecision(9)
++          << cap.decoded_phase_delta
++          << ",\"floating_base_weight\":" << std::setprecision(9)
++          << cap.floating_base_weight
++          << ",\"body_pos_des\":";
++      writeJsonArray(out, cap.body_pos_des, 9);
++      out << ",\"body_vel_des\":";
++      writeJsonArray(out, cap.body_vel_des, 9);
++      out << ",\"body_rpy_des\":";
++      writeJsonArray(out, cap.body_rpy_des, 9);
++      out << ",\"body_ang_vel_des\":";
++      writeJsonArray(out, cap.body_ang_vel_des, 9);
++      out << ",\"fr_des\":";
++      writeJsonArray(out, cap.fr_des, 9);
++      out << ",\"footstep_planner_pFoot_des\":";
++      writeJsonArray(out, cap.footstep_planner_pFoot_des, 9);
++      out << ",\"mujoco_foot_contact_post\":";
++      writeJsonArray(out, cap.mujoco_foot_contact_post, 9);
++      out << "}";
++
++      out << "}\n";
++      ++total_ticks;
++    }
++
++    const auto end_est = runtime.stateEstimate();
++    const auto end_state = runtime.robotState();
++    std::cout << "episode " << ep << ": ticks=" << ep_ticks[ep]
++              << " final_est_z=" << end_est.position[2]
++              << " final_truth_z=" << end_state.base_pos[2]
++              << " final_est_v_body=[" << end_est.vBody[0] << ","
++              << end_est.vBody[1] << "," << end_est.vBody[2] << "]"
++              << " final_gait_phase=" << runtime.gaitSchedule().gait_phase
++              << "\n";
++  }
++
++  out.close();
++  runtime.shutdown();
++  std::cout << "Wrote " << total_ticks << " tick records to " << output_path
++            << "\n";
++  return 0;
++}
+--- a/src/controller/src/hardware/mujocohw/MdlSimDriver.cc
++++ b/src/controller/src/hardware/mujocohw/MdlSimDriver.cc
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include "MdlSimDriver.hh"
++#include "supervisor/ReplayTraceCapture.hh"
+ #include <stdexcept>
+ 
+ #include <GLFW/glfw3.h>
+@@ -533,7 +534,17 @@
+     --_step_steps;
+   }
+ 
++  if (auto* cap = quadruped::ReplayTraceContext::current(); cap && cap->active) {
++    cap->sim_time_pre_s = _data ? _data->time : 0.0;
++    cap->mujoco_foot_contact_pre = footContactState(0.0f);
++  }
++
+   _integrate(CLOCK_TO_SEC(_mgr->getStepPeriod()));
++
++  if (auto* cap = quadruped::ReplayTraceContext::current(); cap && cap->active) {
++    cap->sim_time_post_s = _data ? _data->time : 0.0;
++    cap->mujoco_foot_contact_post = footContactState(0.0f);
++  }
+ 
+   double sim_time = _data ? _data->time : 0.0;
+   _now = sim_time * 1000000;  // Update current simulation time
+@@ -1478,6 +1489,25 @@
+     double target_time = current_time + dt;
+ 
+     // Step the simulation until we reach the target time
++    int substep = 0;
++    auto record_substep = [&](int idx) {
++      if (auto* cap = quadruped::ReplayTraceContext::current(); cap && cap->active) {
++        if (idx == 0 || idx == 1) {
++          for (int axis = 0; axis < kNumAxes; ++axis) {
++            const int act = _joint_mapping_valid ? _axis_to_actuator[axis] : axis;
++            const double f = (act >= 0 && act < _model->nu) ? _data->actuator_force[act] : 0.0;
++            if (idx == 0) {
++              cap->sim_substep0_tau_unclamped[axis] = _tau[axis];
++              cap->sim_substep0_actuator_force[axis] = f;
++            } else {
++              cap->sim_substep1_tau_unclamped[axis] = _tau[axis];
++              cap->sim_substep1_actuator_force[axis] = f;
++            }
++          }
++        }
++        cap->sim_substep_count = idx + 1;
++      }
++    };
+     while (_data->time < target_time) {
+       // Check if we need a smaller timestep for the final step
+       double remaining_time = target_time - _data->time;
+@@ -1489,6 +1519,7 @@
+         // DBGPRINT("MdlSimDriver: Adjusting timestep to %.3f seconds for final step\n",
+         // remaining_time);
+         mj_step(_model, _data);
++        record_substep(substep++);
+         // Restore original timestep
+         _model->opt.timestep = original_timestep;
+         break;
+@@ -1496,6 +1527,7 @@
+         // DBGPRINT("MdlSimDriver: Stepping simulation by %.3f seconds\n",
+         // _model->opt.timestep);
+         mj_step(_model, _data);
++        record_substep(substep++);
+       }
+     }
+   }
+@@ -1525,6 +1557,7 @@
+   }
+ 
+   // Compute control torques using PD control in controller-axis convention.
++  auto* cap = quadruped::ReplayTraceContext::current();
+   if (_joint_mapping_valid) {
+     for (int axis = 0; axis < kNumAxes; ++axis) {
+       const int actuator = _axis_to_actuator[axis];
+@@ -1548,7 +1581,14 @@
+       // MuJoCo already clamps finite values to the actuator forcerange, so only
+       // NaN/Inf needs guarding — substitute zero torque for that step.
+       d->ctrl[actuator] = std::isfinite(_tau[axis]) ? _tau[axis] : 0.0;
+-    }
++      if (cap && cap->active && !cap->actuator_captured) {
++        cap->actuator_position[axis] = current_pos;
++        cap->actuator_velocity[axis] = current_vel;
++        cap->actuator_enabled[axis] = true;
++        cap->motor_torque[axis] = d->ctrl[actuator];
++      }
++    }
++    if (cap && cap->active) cap->actuator_captured = true;
+     return;
+   }
+ 

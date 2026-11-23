@@ -48,6 +48,7 @@ ULA_HD inline double qfabs(double x) { return x < 0. ? -x : x; }
 template <class S> struct Lim;
 template <> struct Lim<float> {
   ULA_HD static float eps() { return FLT_EPSILON; }
+  ULA_HD static float tiny() { return FLT_MIN; }
   ULA_HD static float inf() { return FLT_MAX; }
   // eps of the step-1 'no infeasibility left' test. FLT_EPSILON (the literal
   // QuadProg++ rule) is far too loose for float on this QP (accepts ~0.1 N
@@ -56,6 +57,7 @@ template <> struct Lim<float> {
 };
 template <> struct Lim<double> {
   ULA_HD static double eps() { return DBL_EPSILON; }
+  ULA_HD static double tiny() { return DBL_MIN; }
   ULA_HD static double inf() { return DBL_MAX; }
   ULA_HD static double psi_eps() { return DBL_EPSILON; }  // exactly QuadProg++
 };

@@ -7,6 +7,7 @@
 #include <controllers/wbc/ContactSpec.hpp>
 #include <controllers/wbc/Task.hpp>
 #include <controllers/wbc/WBC.hpp>
+#include "qp/wbic_problem.hh"
 
 template <typename T>
 class WBIC_ExtraData {
@@ -37,6 +38,8 @@ class WBIC : public WBC<T> {
 
   virtual void MakeTorque(DVec<T>& cmd, void* extra_input = NULL);
 
+  void setQpDispatch(ula::qp::WbicDispatch<T> dispatch) { _qp_dispatch = dispatch; }
+
  private:
   const std::vector<ContactSpec<T>*>* _contact_list;
   const std::vector<Task<T>*>* _task_list;
@@ -48,7 +51,8 @@ class WBIC : public WBC<T> {
   void _GetSolution(const DVec<T>& qddot, DVec<T>& cmd);
   void _SetCost();
   void _SetOptimizationSize();
-  T _SolveQP();  // QuadProg++ (default) or the fixed-storage port (ULA_QP_SOLVER=gi)
+  void _SolveStaged(const DVec<T>& qddot_pre, DVec<T>& cmd);
+  void _SolveQPAndRecover(DVec<T>& qddot_pre, DVec<T>& cmd);
 
   size_t _dim_opt;      // Contact pt delta, First task delta, reaction force
   size_t _dim_eq_cstr;  // equality constraints
@@ -59,6 +63,7 @@ class WBIC : public WBC<T> {
   size_t _dim_floating;
 
   WBIC_ExtraData<T>* _data;
+  ula::qp::WbicDispatch<T> _qp_dispatch{};
 
   GolDIdnani::GVect<double> z;
   // Cost
